@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "OP Ticket System",
+  "version": "1.0.0",
+  "description": "Chrome Extension for OP Ticketing System",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "clipboardRead",
+    "activeTab",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "*://ops.company.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://ops.company.com/*"],
+      "js": ["src/content/index.ts"]
+    }
+  ],
+  "action": {
+    "default_title": "Open OP Ticket System"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  }
+}

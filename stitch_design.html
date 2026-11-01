@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>OpenProject Pro - Assigned To Me</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500&amp;family=Noto+Serif:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #434653;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #8d909e;
+        }
+        .resizer-h:hover {
+            background-color: #3366cc;
+            cursor: col-resize;
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "outline-variant": "#434653",
+                        "secondary-container": "#3131c0",
+                        "on-error-container": "#ffdad6",
+                        "inverse-surface": "#e2e2eb",
+                        "on-surface": "#e2e2eb",
+                        "on-primary": "#002c70",
+                        "on-tertiary-fixed-variant": "#743500",
+                        "surface-bright": "#373940",
+                        "surface-container-lowest": "#0c0e14",
+                        "on-tertiary": "#522300",
+                        "on-secondary-fixed": "#07006c",
+                        "background": "#111319",
+                        "outline": "#8d909e",
+                        "tertiary-container": "#ab5100",
+                        "surface-container": "#1d1f26",
+                        "primary": "#b1c5ff",
+                        "on-secondary": "#1000a9",
+                        "tertiary-fixed-dim": "#ffb68a",
+                        "surface": "#111319",
+                        "surface-variant": "#33343b",
+                        "on-secondary-container": "#b0b2ff",
+                        "primary-fixed-dim": "#b1c5ff",
+                        "inverse-primary": "#2259bf",
+                        "secondary": "#c0c1ff",
+                        "on-surface-variant": "#c3c6d5",
+                        "on-background": "#e2e2eb",
+                        "surface-container-low": "#191b22",
+                        "on-primary-fixed": "#001946",
+                        "surface-container-high": "#282a30",
+                        "on-secondary-fixed-variant": "#2f2ebe",
+                        "tertiary": "#ffb68a",
+                        "surface-tint": "#b1c5ff",
+                        "primary-fixed": "#d9e2ff",
+                        "error-container": "#93000a",
+                        "on-primary-fixed-variant": "#00419d",
+                        "on-tertiary-container": "#ffe8db",
+                        "on-error": "#690005",
+                        "on-primary-container": "#e7ebff",
+                        "surface-container-highest": "#33343b",
+                        "error": "#ffb4ab",
+                        "inverse-on-surface": "#2e3037",
+                        "secondary-fixed-dim": "#c0c1ff",
+                        "primary-container": "#3366cc",
+                        "secondary-fixed": "#e1e0ff",
+                        "surface-dim": "#111319",
+                        "on-tertiary-fixed": "#321300",
+                        "tertiary-fixed": "#ffdbc8"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "element-gap-standard": "1rem",
+                        "element-gap-dense": "0.5rem",
+                        "container-padding": "1.5rem",
+                        "sidebar-width": "260px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter"],
+                        "doc-body": ["Noto Serif"],
+                        "code-sm": ["JetBrains Mono"],
+                        "body-lg": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "body-md": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "headline-sm": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                        "doc-body": ["16px", {"lineHeight": "26px", "fontWeight": "400"}],
+                        "code-sm": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                        "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "headline-lg": ["30px", {"lineHeight": "36px", "letterSpacing": "-0.02em", "fontWeight": "600"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "500"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "body-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                        "headline-sm": ["18px", {"lineHeight": "24px", "fontWeight": "600"}]
+                    }
+                }
+            },
+        }
+    </script>
+</head>
+<body class="bg-background text-on-surface font-body-md selection:bg-primary-container/30 selection:text-primary min-h-screen flex">
+<!-- Sidebar -->
+<aside class="w-sidebar-width h-screen sticky left-0 top-0 bg-surface-container-low border-r border-outline-variant flex flex-col p-unit z-50">
+<div class="px-gutter py-element-gap-standard mb-element-gap-standard">
+<div class="flex items-center gap-unit">
+<span class="material-symbols-outlined text-primary text-headline-sm" style="font-variation-settings: 'FILL' 1;">developer_board</span>
+<h1 class="font-headline-sm text-headline-sm font-bold text-on-surface">Project Workspace</h1>
+</div>
+<p class="font-label-md text-label-md text-on-surface-variant opacity-70">Management Console</p>
+</div>
+<nav class="flex-1 px-unit space-y-unit">
+<a class="flex items-center gap-3 px-3 py-2 bg-secondary-container text-on-secondary-container rounded-lg transition-all" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+<span class="font-label-md text-label-md">Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all group" href="#">
+<span class="material-symbols-outlined">inventory_2</span>
+<span class="font-label-md text-label-md">Work Packages</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all group" href="#">
+<span class="material-symbols-outlined">schedule</span>
+<span class="font-label-md text-label-md">Time Tracking</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all group" href="#">
+<span class="material-symbols-outlined">analytics</span>
+<span class="font-label-md text-label-md">Reports</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all group" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</a>
+</nav>
+<div class="p-unit mt-auto">
+<button class="w-full py-2 mb-gutter bg-primary text-on-primary font-label-md text-label-md rounded-lg flex items-center justify-center gap-2 active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-[18px]">add</span>
+                New Project
+            </button>
+<div class="space-y-unit border-t border-outline-variant pt-unit">
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all" href="#">
+<span class="material-symbols-outlined">help</span>
+<span class="font-label-md text-label-md">Help</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:bg-surface-variant rounded-lg transition-all text-error" href="#">
+<span class="material-symbols-outlined">logout</span>
+<span class="font-label-md text-label-md">Logout</span>
+</a>
+</div>
+</div>
+</aside>
+<!-- Main Wrapper -->
+<div class="flex-1 flex flex-col min-w-0">
+<!-- Header -->
+<header class="bg-surface-container w-full h-12 sticky top-0 z-50 border-b border-outline-variant flex justify-between items-center px-gutter">
+<div class="flex items-center gap-gutter">
+<span class="font-headline-sm text-headline-sm font-bold text-primary">OpenProject Pro</span>
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+<input class="bg-surface-variant border-none rounded-lg pl-9 pr-3 py-1 text-body-sm w-full focus:ring-1 focus:ring-primary placeholder:text-on-surface-variant/50" placeholder="Search Workspace..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-gutter">
+<nav class="hidden md:flex gap-4">
+<a class="font-body-md text-body-md text-primary font-bold border-b-2 border-primary transition-colors h-12 flex items-center" href="#">My Work</a>
+<a class="font-body-md text-body-md text-on-surface-variant font-normal hover:bg-surface-variant transition-colors h-12 flex items-center px-2" href="#">Board</a>
+<a class="font-body-md text-body-md text-on-surface-variant font-normal hover:bg-surface-variant transition-colors h-12 flex items-center px-2" href="#">Backlog</a>
+</nav>
+<div class="h-6 w-px bg-outline-variant mx-2"></div>
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:bg-surface-variant p-1 rounded-full transition-colors">notifications</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:bg-surface-variant p-1 rounded-full transition-colors">settings</span>
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center text-on-primary-container font-bold text-xs border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A professional studio portrait of a software engineer with short dark hair and modern glasses, smiling subtly. The background is a clean, out-of-focus tech office with soft blue and grey lighting that matches the workspace theme." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCB9rYhejon3bNwdka-Lgnv16djcsP1vHVlA1HAdfq2MU5Ic6g3Hu78WULaEyRhLXOla_KhKC4paxEucrQv5WEHeHvvMPxVf0ZCX1COE49uOlVbaXQzOZdi9EfpggUMSnIkRBkCImYxDqXwMJFIfDfTGRsMeUmih8n78dLHjTIXs1rtUjaFJgPMmg0xKnw5NeDyaB-evwnvPtws0QYzeyM1VXK-rO2WerBCRWcfa6KXgePZBPr23b7VMFJLM7G46ZsQLb1fRYp6yFA"/>
+</div>
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="flex-1 flex flex-col overflow-hidden">
+<!-- Content Header / Dashboard Summary -->
+<div class="p-gutter border-b border-outline-variant bg-surface-container-lowest">
+<div class="flex justify-between items-end mb-gutter">
+<div>
+<h2 class="font-headline-md text-headline-md mb-unit">Assigned To Me</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Manage your personal task queue and daily priorities.</p>
+</div>
+<button class="bg-primary-container text-on-primary-container px-3 py-1.5 rounded-lg flex items-center gap-2 hover:bg-opacity-90 active:scale-95 transition-all text-label-md font-label-md">
+<span class="material-symbols-outlined text-[18px]">bolt</span>
+                        Quick Create
+                    </button>
+</div>
+<!-- Summary Cards Bento Grid -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-element-gap-standard">
+<div class="bg-surface-container-high p-gutter rounded-xl border border-outline-variant/50 flex flex-col gap-unit group hover:border-primary/30 transition-all">
+<span class="text-on-surface-variant font-label-md text-label-md">Open Tasks</span>
+<div class="flex items-baseline gap-2">
+<span class="text-headline-lg font-headline-lg text-primary">24</span>
+<span class="text-on-surface-variant text-[12px] opacity-60">+3 this week</span>
+</div>
+</div>
+<div class="bg-surface-container-high p-gutter rounded-xl border border-outline-variant/50 flex flex-col gap-unit group hover:border-error/30 transition-all">
+<span class="text-on-surface-variant font-label-md text-label-md">Overdue</span>
+<div class="flex items-baseline gap-2">
+<span class="text-headline-lg font-headline-lg text-error">3</span>
+<span class="material-symbols-outlined text-error text-[18px]">warning</span>
+</div>
+</div>
+<div class="bg-surface-container-high p-gutter rounded-xl border border-outline-variant/50 flex flex-col gap-unit group hover:border-secondary/30 transition-all">
+<span class="text-on-surface-variant font-label-md text-label-md">Due Today</span>
+<div class="flex items-baseline gap-2">
+<span class="text-headline-lg font-headline-lg text-on-surface">5</span>
+<span class="text-on-surface-variant text-[12px] opacity-60">1 urgent</span>
+</div>
+</div>
+<div class="bg-surface-container-high p-gutter rounded-xl border border-outline-variant/50 flex flex-col gap-unit group hover:border-tertiary/30 transition-all">
+<span class="text-on-surface-variant font-label-md text-label-md">High Priority</span>
+<div class="flex items-baseline gap-2">
+<span class="text-headline-lg font-headline-lg text-tertiary">8</span>
+</div>
+</div>
+<div class="bg-surface-container-high p-gutter rounded-xl border border-outline-variant/50 flex flex-col gap-unit group hover:border-primary/30 transition-all">
+<span class="text-on-surface-variant font-label-md text-label-md">Hours Logged</span>
+<div class="flex items-baseline gap-2">
+<span class="text-headline-lg font-headline-lg text-primary">32.5</span>
+<span class="text-on-surface-variant text-[12px] opacity-60">/ 40h</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Filter Bar -->
+<div class="px-gutter py-2 border-b border-outline-variant bg-surface flex items-center gap-2 overflow-x-auto no-scrollbar">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">filter_list</span>
+<div class="flex items-center gap-2">
+<div class="bg-surface-variant border border-outline-variant rounded-full px-2 py-0.5 flex items-center gap-2 group">
+<span class="text-[11px] text-on-surface-variant">Status:</span>
+<span class="text-[12px] font-medium text-on-surface">Open</span>
+<span class="material-symbols-outlined text-[14px] cursor-pointer hover:text-error transition-colors">close</span>
+</div>
+<div class="bg-surface-variant border border-outline-variant rounded-full px-2 py-0.5 flex items-center gap-2 group">
+<span class="text-[11px] text-on-surface-variant">Assignee:</span>
+<span class="text-[12px] font-medium text-on-surface">Mine</span>
+<span class="material-symbols-outlined text-[14px] cursor-pointer hover:text-error transition-colors">close</span>
+</div>
+<div class="bg-surface-variant border border-outline-variant rounded-full px-2 py-0.5 flex items-center gap-2 group">
+<span class="text-[11px] text-on-surface-variant">Type:</span>
+<span class="text-[12px] font-medium text-on-surface">Bug</span>
+<span class="material-symbols-outlined text-[14px] cursor-pointer hover:text-error transition-colors">close</span>
+</div>
+<div class="bg-surface-variant border border-outline-variant rounded-full px-2 py-0.5 flex items-center gap-2 group">
+<span class="text-[11px] text-on-surface-variant">Priority:</span>
+<span class="text-[12px] font-medium text-on-surface">High Priority</span>
+<span class="material-symbols-outlined text-[14px] cursor-pointer hover:text-error transition-colors">close</span>
+</div>
+<button class="text-primary hover:bg-primary/10 rounded-full px-3 py-0.5 text-[12px] font-medium flex items-center gap-1 transition-all">
+<span class="material-symbols-outlined text-[16px]">add</span>
+                        Add Filter
+                    </button>
+</div>
+</div>
+<!-- Split View Content Area -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Left Pane: High-Density Table (60%) -->
+<div class="w-[60%] flex flex-col border-r border-outline-variant overflow-hidden">
+<div class="flex-1 overflow-auto">
+<table class="w-full text-left border-collapse">
+<thead class="sticky top-0 bg-surface-container-high z-10 border-b border-outline-variant">
+<tr class="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
+<th class="px-gutter py-2 font-medium w-24">ID</th>
+<th class="px-gutter py-2 font-medium">Subject</th>
+<th class="px-gutter py-2 font-medium w-32">Status</th>
+<th class="px-gutter py-2 font-medium w-32">Priority</th>
+<th class="px-gutter py-2 font-medium w-32">Assignee</th>
+<th class="px-gutter py-2 font-medium w-32 text-right">Hours</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant">
+<!-- Row 1 Active -->
+<tr class="bg-primary/5 border-l-4 border-l-primary hover:bg-primary/10 cursor-pointer transition-colors group">
+<td class="px-gutter py-2 text-primary font-code-sm text-code-sm">#1402</td>
+<td class="px-gutter py-2 font-body-sm text-body-sm text-on-surface">Refactor API middleware for latency optimization</td>
+<td class="px-gutter py-2">
+<span class="bg-primary/10 text-primary px-2 py-0.5 rounded text-[11px] font-bold uppercase">In Progress</span>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-1 text-tertiary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">priority_high</span>
+<span class="text-[12px]">High</span>
+</div>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-surface-variant flex items-center justify-center text-[10px] border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up avatar of a user with glasses, matching the workspace color palette. The lighting is crisp and modern, emphasizing a professional digital profile style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDbjtG2yMWdDmwOJmBOUfo8kAOT5095P7lKBRs9DFSpDoCvyQzglgVokHXvyM1oNdwB-eOIUbVj_d_a3xQg_64ibgoClEFLBCkE4DPSiKp_3RCzchgntPosrQZy52SSE243koP4AZbAZaLrLrDzydabIE5Gwo1rbqoVcPY-QorDUO4lyEtk0NFX7H-XGtErQ1tVt80DrVmwBK22Wi6cpGhkQoj8-55tuhWtSxNyFBE0nwCX27K2UNiAJedTJt3ulAKZcr9x579rz3o"/>
+</div>
+<span class="text-[12px]">You</span>
+</div>
+</td>
+<td class="px-gutter py-2 text-right text-on-surface-variant font-code-sm text-code-sm">4.5 / 12</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-variant cursor-pointer transition-colors group">
+<td class="px-gutter py-2 text-on-surface-variant font-code-sm text-code-sm">#1398</td>
+<td class="px-gutter py-2 font-body-sm text-body-sm text-on-surface">Memory leak in dashboard charts component</td>
+<td class="px-gutter py-2">
+<span class="bg-error/10 text-error px-2 py-0.5 rounded text-[11px] font-bold uppercase">Critical</span>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-1 text-error">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">keyboard_double_arrow_up</span>
+<span class="text-[12px]">Urgent</span>
+</div>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-surface-variant flex items-center justify-center text-[10px] border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up professional avatar of a software developer. High density tech UI style image." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAJnsPfUxDkpgQ1h_n0TTLWrqIlKRwYRwt5MP6AU5xw23Xc7ByEeirlQZH-h5W8DcRegAYvoIMW8poQzpWIWnJuNeSYBqSSMtE7pjc9SE75TQk4rPn5ggxXcsyCRJ621U-LDDo5om54yJfFYdxXYWQOp2jDlFsDHAHTUh69SiE-VA6_Z8kTuiRD47zlHqFzLbFxBDtq83g46QShG4GR9HExUjElJFag6wGQ_iVftRtg7ovfJsc8wAYt_g02byYdTwzpbXHWdQHlM24"/>
+</div>
+<span class="text-[12px]">You</span>
+</div>
+</td>
+<td class="px-gutter py-2 text-right text-on-surface-variant font-code-sm text-code-sm">1.0 / 4</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-variant cursor-pointer transition-colors group">
+<td class="px-gutter py-2 text-on-surface-variant font-code-sm text-code-sm">#1410</td>
+<td class="px-gutter py-2 font-body-sm text-body-sm text-on-surface">Add tooltips to the time tracking wizard</td>
+<td class="px-gutter py-2">
+<span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[11px] font-bold uppercase border border-outline-variant">New</span>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">remove</span>
+<span class="text-[12px]">Normal</span>
+</div>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-surface-variant flex items-center justify-center text-[10px] border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up professional avatar of a software developer. High density tech UI style image." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBRpdadOTPfu9Bxt2Nww_tEaBVi3aZ16ZVyZwdo1ounIwJ5vrJhp3g1SvJwETxaV0HbfY0UAJ_aLRmuOyhFKh_n4_z-4O7pPLxOrFX5VfLeuxczJ73faxNFJrWj1zDaAhfSoXD9zMY4aZQh595mFLcEsMu5gRjzk3gaS-9XADjkLoPzq9-LXCtm5w6h-PADh8E5i4TBzoTZt-CvfDmRxIBmnaCXlBpKr61NOvEoFR7zdboA5m7fPcdhdfXb_bBY2CA1wFCRkx1_2Co"/>
+</div>
+<span class="text-[12px]">You</span>
+</div>
+</td>
+<td class="px-gutter py-2 text-right text-on-surface-variant font-code-sm text-code-sm">0 / 2</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-surface-variant cursor-pointer transition-colors group">
+<td class="px-gutter py-2 text-on-surface-variant font-code-sm text-code-sm">#1350</td>
+<td class="px-gutter py-2 font-body-sm text-body-sm text-on-surface">Update documentation for deployment pipeline</td>
+<td class="px-gutter py-2">
+<span class="bg-secondary-container/20 text-on-secondary-container px-2 py-0.5 rounded text-[11px] font-bold uppercase">Feedback</span>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+<span class="text-[12px]">Low</span>
+</div>
+</td>
+<td class="px-gutter py-2">
+<div class="flex items-center gap-2">
+<div class="w-5 h-5 rounded-full bg-surface-variant flex items-center justify-center text-[10px] border border-outline-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up professional avatar of a software developer. High density tech UI style image." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCQMC5UaVFq5mDccm9hMPni5qqAvPqLeX4TMZyQngi3hb_z7GQjma_sNBYUwWVyIaGuT07s74gzJpHzyky2EGHucYnucvcv7bEhSSUVYICxCOQIgx8rGpJ5tSbqDWJveajLwK_ZpqxqEPtxiJ-uF84zn5IT4Egzc6XE_Q6w4XhzZ1Fc0SwJbUjQkZHOIyIAjhkv3tr4Mi_ohfoLu5tVVoXxiQvqH4F-MROMPMJKt7j3YpvTYROcfNh-G0EoPJ-9rlYkGdwZP4D0_Jw"/>
+</div>
+<span class="text-[12px]">You</span>
+</div>
+</td>
+<td class="px-gutter py-2 text-right text-on-surface-variant font-code-sm text-code-sm">8 / 8</td>
+</tr>
+<!-- Filler Rows -->
+<script>
+                                    for(let i=0; i<15; i++) {
+                                        document.write(`
+                                        <tr class="hover:bg-surface-variant cursor-pointer transition-colors group">
+                                            <td class="px-gutter py-2 text-on-surface-variant font-code-sm text-code-sm">#${1420+i}</td>
+                                            <td class="px-gutter py-2 font-body-sm text-body-sm text-on-surface">Automated test suite maintenance for project ${String.fromCharCode(65+i)}</td>
+                                            <td class="px-gutter py-2">
+                                                <span class="bg-surface-variant text-on-surface-variant px-2 py-0.5 rounded text-[11px] font-bold uppercase border border-outline-variant">Backlog</span>
+                                            </td>
+                                            <td class="px-gutter py-2">
+                                                <div class="flex items-center gap-1 text-on-surface-variant">
+                                                    <span class="material-symbols-outlined text-[16px]">remove</span>
+                                                    <span class="text-[12px]">Normal</span>
+                                                </div>
+                                            </td>
+                                            <td class="px-gutter py-2">
+                                                <div class="flex items-center gap-2">
+                                                    <div class="w-5 h-5 rounded-full bg-surface-variant flex items-center justify-center text-[10px] border border-outline-variant"></div>
+                                                    <span class="text-[12px]">You</span>
+                                                </div>
+                                            </td>
+                                            <td class="px-gutter py-2 text-right text-on-surface-variant font-code-sm text-code-sm">0 / 4</td>
+                                        </tr>
+                                        `);
+                                    }
+                                </script>
+</tbody>
+</table>
+</div>
+<!-- Table Footer -->
+<div class="bg-surface-container-low px-gutter py-2 border-t border-outline-variant flex justify-between items-center">
+<span class="text-[12px] text-on-surface-variant">Showing 24 work packages</span>
+<div class="flex gap-2">
+<button class="p-1 hover:bg-surface-variant rounded border border-outline-variant"><span class="material-symbols-outlined text-[18px]">chevron_left</span></button>
+<button class="p-1 hover:bg-surface-variant rounded border border-outline-variant"><span class="material-symbols-outlined text-[18px]">chevron_right</span></button>
+</div>
+</div>
+</div>
+<!-- Right Pane: Live Preview (40%) -->
+<div class="flex-1 bg-surface-container-low overflow-auto flex flex-col">
+<div class="p-gutter flex-1">
+<!-- Preview Header -->
+<div class="flex justify-between items-start mb-element-gap-standard">
+<div>
+<span class="text-on-surface-variant font-code-sm text-code-sm uppercase tracking-widest block mb-1">Package #1402</span>
+<h3 class="font-headline-sm text-headline-sm text-on-surface leading-tight">Refactor API middleware for latency optimization</h3>
+</div>
+<button class="text-on-surface-variant hover:text-on-surface">
+<span class="material-symbols-outlined">close</span>
+</button>
+</div>
+<!-- Metadata Badges -->
+<div class="flex flex-wrap gap-2 mb-element-gap-standard">
+<div class="bg-primary/10 text-primary border border-primary/20 px-2 py-1 rounded flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+<span class="text-[11px] font-bold uppercase">In Progress</span>
+</div>
+<div class="bg-surface-variant text-on-surface-variant border border-outline-variant px-2 py-1 rounded flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">calendar_today</span>
+<span class="text-[11px] font-bold uppercase">Due: Oct 24, 2023</span>
+</div>
+<div class="bg-tertiary-container/20 text-tertiary border border-tertiary/20 px-2 py-1 rounded flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">priority_high</span>
+<span class="text-[11px] font-bold uppercase">High Priority</span>
+</div>
+</div>
+<!-- Description Section -->
+<div class="bg-surface-container p-container-padding rounded-xl border border-outline-variant/30 mb-element-gap-standard">
+<h4 class="font-label-md text-label-md text-on-surface-variant mb-2 uppercase opacity-60">Description</h4>
+<div class="font-body-sm text-body-sm text-on-surface space-y-3">
+<p>Current middleware stack is introducing a 150ms overhead on every authenticated request. We need to:</p>
+<ul class="list-disc ml-4 space-y-1 text-on-surface-variant">
+<li>Implement Redis caching for session validation</li>
+<li>Optimize the payload schema to reduce serialization time</li>
+<li>Merge redundant validation hooks</li>
+</ul>
+<p class="italic text-[12px] opacity-50">Last edited by Lead Architect, 2 hours ago.</p>
+</div>
+</div>
+<!-- Activity/Comments Placeholder -->
+<div class="space-y-4">
+<h4 class="font-label-md text-label-md text-on-surface-variant uppercase opacity-60">Recent Activity</h4>
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/20 shrink-0 border border-primary/30 flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px] text-primary">chat_bubble</span>
+</div>
+<div class="flex-1 bg-surface-variant/50 p-3 rounded-lg border border-outline-variant/20">
+<p class="text-[13px] text-on-surface mb-1"><span class="font-bold">Project Manager</span> added a comment</p>
+<p class="text-[13px] text-on-surface-variant">"Please prioritize the Redis implementation before the Friday sprint review."</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Quick Actions Footer -->
+<div class="sticky bottom-0 p-gutter bg-surface-container border-t border-outline-variant flex gap-element-gap-dense">
+<button class="flex-1 bg-primary text-on-primary py-2 rounded-lg font-label-md text-label-md flex items-center justify-center gap-2 hover:brightness-110 transition-all">
+<span class="material-symbols-outlined text-[20px]">timer</span>
+                            Log Time
+                        </button>
+<button class="flex-1 border border-outline-variant text-on-surface py-2 rounded-lg font-label-md text-label-md flex items-center justify-center gap-2 hover:bg-surface-variant transition-all">
+<span class="material-symbols-outlined text-[20px]">add_comment</span>
+                            Add Comment
+                        </button>
+<button class="w-10 border border-outline-variant text-on-surface-variant rounded-lg flex items-center justify-center hover:bg-surface-variant transition-all">
+<span class="material-symbols-outlined text-[20px]">more_vert</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- Floating Action Button (Only on Mobile-ish or Contextual) -->
+<button class="fixed bottom-gutter right-gutter md:hidden bg-primary text-on-primary w-14 h-14 rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-transform z-[60]">
+<span class="material-symbols-outlined text-[28px]">add</span>
+</button>
+<script>
+        // Simple Micro-interactions for table rows
+        const rows = document.querySelectorAll('tbody tr');
+        rows.forEach(row => {
+            row.addEventListener('click', () => {
+                rows.forEach(r => {
+                    r.classList.remove('bg-primary/5', 'border-l-4', 'border-l-primary');
+                    r.classList.add('hover:bg-surface-variant');
+                });
+                row.classList.add('bg-primary/5', 'border-l-4', 'border-l-primary');
+                row.classList.remove('hover:bg-surface-variant');
+                // Simulate updating the right panel
+                const id = row.querySelector('td:first-child').innerText;
+                const title = row.querySelector('td:nth-child(2)').innerText;
+                document.querySelector('h3').innerText = title;
+                document.querySelector('.preview-id').innerText = `Package ${id}`;
+            });
+        });
+
+        // Add class to ID span for dynamic updates
+        document.querySelector('.preview-id-container span:first-child').classList.add('preview-id');
+    </script>
+</body></html>
