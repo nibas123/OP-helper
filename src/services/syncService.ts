@@ -71,12 +71,25 @@ export const syncService = {
         }
       }
 
-      // 2. Fetch Real Statuses, Types, and Users from OpenProject
+      // 2. Fetch Current User, Real Statuses (with isClosed), Types, Projects & Assignees
+      try {
+        const me = await OpenProjectService.getCurrentUser();
+        if (me && me.id) {
+          await db.setMeta('currentUser', { id: String(me.id), name: me.name });
+        }
+      } catch (e) {
+        console.warn('[Sync] Current user warning:', e);
+      }
+
       try {
         const statusesData = await OpenProjectService.getStatuses();
         const stElements = statusesData?._embedded?.elements || [];
         if (stElements.length > 0) {
-          await db.putStatuses(stElements.map((s: any) => ({ id: String(s.id), name: s.name })));
+          await db.putStatuses(stElements.map((s: any) => ({
+            id: String(s.id),
+            name: s.name,
+            isClosed: !!s.isClosed
+          })));
         }
 
         const typesData = await OpenProjectService.getTypes();
@@ -85,10 +98,30 @@ export const syncService = {
           await db.putTypes(tyElements.map((t: any) => ({ id: String(t.id), name: t.name })));
         }
 
-        const usersData = await OpenProjectService.getUsers();
-        const uElements = usersData?._embedded?.elements || [];
-        if (uElements.length > 0) {
-          await db.putUsers(uElements.map((u: any) => ({ id: String(u.id), name: u.name })));
+        // Fetch Projects and available assignees for each project
+        const projsData = await OpenProjectService.getProjects();
+        const pElements = projsData?._embedded?.elements || [];
+        if (pElements.length > 0) {
+          await db.setMeta('projects', pElements.map((p: any) => ({
+            id: String(p.id),
+            identifier: p.identifier,
+            name: p.name
+          })));
+
+          for (const p of pElements) {
+            try {
+              const aData = await OpenProjectService.getProjectMembers(p.id);
+              const members = (aData?._embedded?.elements || []).map((u: any) => ({
+                id: String(u.id),
+                name: u.name
+              }));
+              if (members.length > 0) {
+                await db.putProjectAssignees(String(p.id), members);
+              }
+            } catch {
+              // 403 on some restricted projects is expected
+            }
+          }
         }
       } catch (e) {
         console.warn('[Sync] Lookups sync warning:', e);
@@ -106,6 +139,8 @@ export const syncService = {
         const assigneeId = assigneeHref.split('/').pop() || undefined;
         const typeHref = item._links?.type?.href || '';
         const typeId = typeHref.split('/').pop() || undefined;
+        const projectHref = item._links?.project?.href || '';
+        const projectId = projectHref.split('/').pop() || undefined;
 
         return {
           id: item.id,
@@ -114,6 +149,7 @@ export const syncService = {
           type: item._links?.type?.title || 'Task',
           typeId: typeId,
           project: item._links?.project?.title || 'Unknown Project',
+          projectId: projectId,
           status: item._links?.status?.title || 'Open',
           statusId: statusId,
           priority: item._links?.priority?.title || 'Normal',
@@ -156,6 +192,25 @@ export const syncService = {
       });
 
       await db.putTickets(mergedTickets);
+
+      // Supplementary project assignees: derive from tickets if API 403'd
+      const allTickets = await db.getAllTickets();
+      const projectMap: Record<string, Map<string, string>> = {};
+      for (const t of allTickets) {
+        if (t.projectId && t.assigneeId && t.assignee && t.assignee.toLowerCase() !== 'unassigned') {
+          if (!projectMap[t.projectId]) projectMap[t.projectId] = new Map();
+          projectMap[t.projectId].set(t.assigneeId, t.assignee);
+        }
+      }
+      for (const [projId, userMap] of Object.entries(projectMap)) {
+        const existing = await db.getProjectAssignees(projId);
+        if (!existing || existing.length === 0) {
+          const derived = Array.from(userMap.entries()).map(([id, name]) => ({ id, name }));
+          if (derived.length > 0) {
+            await db.putProjectAssignees(projId, derived);
+          }
+        }
+      }
 
       // 4. Fetch Recent (Past 7 Days) Logged Efforts
       const today = new Date();
@@ -216,6 +271,8 @@ export const syncService = {
       const assigneeId = assigneeHref.split('/').pop() || undefined;
       const typeHref = raw._links?.type?.href || '';
       const typeId = typeHref.split('/').pop() || undefined;
+      const projectHref = raw._links?.project?.href || '';
+      const projectId = projectHref.split('/').pop() || undefined;
 
       const ticket: LocalTicket = {
         id: raw.id,
@@ -224,6 +281,7 @@ export const syncService = {
         type: raw._links?.type?.title || 'Task',
         typeId: typeId,
         project: raw._links?.project?.title || 'Unknown Project',
+        projectId: projectId,
         status: raw._links?.status?.title || 'Open',
         statusId: statusId,
         priority: raw._links?.priority?.title || 'Normal',
@@ -271,6 +329,8 @@ export const syncService = {
         const assigneeId = assigneeHref.split('/').pop() || undefined;
         const typeHref = item._links?.type?.href || '';
         const typeId = typeHref.split('/').pop() || undefined;
+        const projectHref = item._links?.project?.href || '';
+        const projectId = projectHref.split('/').pop() || undefined;
 
         const ticket: LocalTicket = {
           id: item.id,
@@ -279,6 +339,7 @@ export const syncService = {
           type: item._links?.type?.title || 'Task',
           typeId: typeId,
           project: item._links?.project?.title || 'Unknown Project',
+          projectId: projectId,
           status: item._links?.status?.title || 'Open',
           statusId: statusId,
           priority: item._links?.priority?.title || 'Normal',

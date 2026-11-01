@@ -47,10 +47,111 @@ export interface SyncQueueItem {
 export interface LookupItem {
   id: string;
   name: string;
+  isClosed?: boolean;
 }
 
+export interface ProjectAssigneeRecord {
+  projectId: string;
+  members: LookupItem[];
+  updatedAt: number;
+}
+
+export interface ViewFilters {
+  statusCategory?: 'all' | 'open' | 'closed';
+  statusId?: string;
+  project?: string;
+  projectId?: string;
+  type?: string;
+  assignee?: string; // 'all' | 'me' | 'unassigned' | specific userId/name
+  priority?: string;
+  starredOnly?: boolean;
+  sortBy?: 'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority';
+}
+
+export interface SavedView {
+  id: string;
+  name: string;
+  isFavorite: boolean;
+  isSystem: boolean;
+  isDefault?: boolean;
+  createdAt: string;
+  filters: ViewFilters;
+}
+
+export const DEFAULT_SAVED_VIEWS: SavedView[] = [
+  {
+    id: 'sys_all_open',
+    name: 'All Open',
+    isFavorite: true,
+    isSystem: true,
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'open',
+      sortBy: 'updated_desc'
+    }
+  },
+  {
+    id: 'sys_assigned_to_me',
+    name: 'Assigned to Me',
+    isFavorite: true,
+    isSystem: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'open',
+      assignee: 'me',
+      sortBy: 'updated_desc'
+    }
+  },
+  {
+    id: 'sys_starred',
+    name: 'Starred Tasks',
+    isFavorite: true,
+    isSystem: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'all',
+      starredOnly: true,
+      sortBy: 'updated_desc'
+    }
+  },
+  {
+    id: 'sys_recently_updated',
+    name: 'Recently Updated',
+    isFavorite: false,
+    isSystem: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'all',
+      sortBy: 'updated_desc'
+    }
+  },
+  {
+    id: 'sys_closed',
+    name: 'Closed',
+    isFavorite: false,
+    isSystem: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'closed',
+      sortBy: 'updated_desc'
+    }
+  },
+  {
+    id: 'sys_everything',
+    name: 'Everything',
+    isFavorite: false,
+    isSystem: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    filters: {
+      statusCategory: 'all',
+      sortBy: 'updated_desc'
+    }
+  }
+];
+
 const DB_NAME = 'op_mobile_pwa_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 class LocalDatabase {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -107,6 +208,16 @@ class LocalDatabase {
         // Users Store
         if (!db.objectStoreNames.contains('users')) {
           db.createObjectStore('users', { keyPath: 'id' });
+        }
+
+        // Saved Views Store (Views feature similar to OpenProject)
+        if (!db.objectStoreNames.contains('savedViews')) {
+          db.createObjectStore('savedViews', { keyPath: 'id' });
+        }
+
+        // Project-Specific Assignees Store
+        if (!db.objectStoreNames.contains('projectAssignees')) {
+          db.createObjectStore('projectAssignees', { keyPath: 'projectId' });
         }
       };
 
@@ -307,6 +418,132 @@ class LocalDatabase {
       }
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // --- Project Specific Assignees ---
+
+  async getProjectAssignees(projectId: string): Promise<LookupItem[] | null> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('projectAssignees', 'readonly');
+      const store = tx.objectStore('projectAssignees');
+      const req = store.get(projectId);
+      req.onsuccess = () => {
+        const res = req.result as ProjectAssigneeRecord | undefined;
+        resolve(res ? res.members : null);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async putProjectAssignees(projectId: string, members: LookupItem[]): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('projectAssignees', 'readwrite');
+      const store = tx.objectStore('projectAssignees');
+      const record: ProjectAssigneeRecord = {
+        projectId,
+        members,
+        updatedAt: Date.now()
+      };
+      store.put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async getAllProjectAssignees(): Promise<Record<string, LookupItem[]>> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('projectAssignees', 'readonly');
+      const store = tx.objectStore('projectAssignees');
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const records = (req.result || []) as ProjectAssigneeRecord[];
+        const map: Record<string, LookupItem[]> = {};
+        for (const r of records) {
+          map[r.projectId] = r.members;
+        }
+        resolve(map);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // --- Saved Views ---
+
+  async getSavedViews(): Promise<SavedView[]> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('savedViews', 'readonly');
+      const store = tx.objectStore('savedViews');
+      const req = store.getAll();
+      req.onsuccess = async () => {
+        let results = (req.result || []) as SavedView[];
+        if (results.length === 0) {
+          // Initialize default system views
+          await this.putSavedViews(DEFAULT_SAVED_VIEWS);
+          results = [...DEFAULT_SAVED_VIEWS];
+        }
+        resolve(results);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async putSavedView(view: SavedView): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('savedViews', 'readwrite');
+      const store = tx.objectStore('savedViews');
+      store.put(view);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async putSavedViews(views: SavedView[]): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('savedViews', 'readwrite');
+      const store = tx.objectStore('savedViews');
+      for (const v of views) {
+        store.put(v);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async deleteSavedView(id: string): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('savedViews', 'readwrite');
+      const store = tx.objectStore('savedViews');
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async toggleFavoriteView(id: string): Promise<boolean> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('savedViews', 'readwrite');
+      const store = tx.objectStore('savedViews');
+      const req = store.get(id);
+      req.onsuccess = () => {
+        const view = req.result as SavedView | undefined;
+        if (!view) {
+          resolve(false);
+          return;
+        }
+        view.isFavorite = !view.isFavorite;
+        store.put(view);
+        resolve(view.isFavorite);
+      };
+      req.onerror = () => reject(req.error);
     });
   }
 

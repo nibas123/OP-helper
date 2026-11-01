@@ -132,6 +132,12 @@ export const OpenProjectService = {
     return response.data;
   },
 
+  getCurrentUser: async () => {
+    const client = await getApiClient();
+    const response = await client.get('/users/me');
+    return response.data;
+  },
+
   getProjectMembers: async (projectId: number | string) => {
     const client = await getApiClient();
     const response = await client.get(`/projects/${projectId}/available_assignees`);

@@ -1,22 +1,22 @@
 import type { LookupItem } from '../services/db';
 
 export const DEFAULT_STATUSES: LookupItem[] = [
-  { id: '1', name: 'New' },
-  { id: '2', name: 'In specification' },
-  { id: '3', name: 'Specified' },
-  { id: '4', name: 'Confirmed' },
-  { id: '5', name: 'To be scheduled' },
-  { id: '6', name: 'Scheduled' },
-  { id: '7', name: 'In progress' },
-  { id: '8', name: 'In development' },
-  { id: '9', name: 'Developed' },
-  { id: '10', name: 'In testing' },
-  { id: '11', name: 'Tested' },
-  { id: '12', name: 'Test failed' },
-  { id: '13', name: 'Closed' },
-  { id: '14', name: 'On hold' },
-  { id: '15', name: 'Rejected' },
-  { id: '16', name: 'Completed' }
+  { id: '1', name: 'New', isClosed: false },
+  { id: '2', name: 'In specification', isClosed: false },
+  { id: '3', name: 'Specified', isClosed: false },
+  { id: '4', name: 'Confirmed', isClosed: false },
+  { id: '5', name: 'To be scheduled', isClosed: false },
+  { id: '6', name: 'Scheduled', isClosed: false },
+  { id: '7', name: 'In progress', isClosed: false },
+  { id: '8', name: 'In development', isClosed: false },
+  { id: '9', name: 'Developed', isClosed: false },
+  { id: '10', name: 'In testing', isClosed: false },
+  { id: '11', name: 'Tested', isClosed: true },
+  { id: '12', name: 'Test failed', isClosed: false },
+  { id: '13', name: 'Closed', isClosed: true },
+  { id: '14', name: 'On hold', isClosed: false },
+  { id: '15', name: 'Rejected', isClosed: true },
+  { id: '16', name: 'Completed', isClosed: false }
 ];
 
 export const DEFAULT_TYPES: LookupItem[] = [
