@@ -21,7 +21,8 @@ import {
   ArrowUpDown,
   Check,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Pencil
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -38,26 +39,42 @@ import { OpenProjectService } from './services/OpenProjectService';
 import { extractTicketIdFromUrlOrText } from './utils/urlParser';
 import { DEFAULT_STATUSES, DEFAULT_TYPES, DEFAULT_PRIORITIES } from './constants/opDefaults';
 
-// Helper to get past 7 days for weekly effort breakdown
-function getWeekDays(): { dateStr: string; label: string; dayName: string; isToday: boolean }[] {
-  const result = [];
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+// Helper to get 5-day work week (Monday - Friday, excluding Sat & Sun)
+function getWorkWeekDays(weekOffset = 0): { dateStr: string; label: string; dayName: string; isToday: boolean }[] {
+  const now = new Date();
+  now.setDate(now.getDate() + weekOffset * 7);
 
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(today.getDate() - i);
+  // Find Monday of this week (0=Sun, 1=Mon, ..., 6=Sat)
+  const currentDay = now.getDay();
+  const diffToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+
+  const days = [];
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
     const dateStr = d.toISOString().split('T')[0];
     const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
     const label = `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })}`;
-    result.push({
+    days.push({
       dateStr,
       label,
       dayName,
       isToday: dateStr === todayStr
     });
   }
-  return result;
+  return days;
+}
+
+function getWeekRangeLabel(days: { dateStr: string; label: string }[]): string {
+  if (!days || days.length === 0) return '';
+  const first = days[0];
+  const last = days[days.length - 1];
+  return `${first.label} – ${last.label}`;
 }
 
 export default function App() {
@@ -133,11 +150,20 @@ export default function App() {
   // Clipboard detection
   const [clipboardTicketId, setClipboardTicketId] = useState<number | null>(null);
 
-  // Efforts & Weekly Tracking
+  // Efforts & Weekly Tracking (5-Day Work Week, Mon-Fri)
+  const [weekOffset, setWeekOffset] = useState(0);
   const [allEfforts, setAllEfforts] = useState<LocalEffort[]>([]);
   const [selectedEffortDate, setSelectedEffortDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [customEffortHours, setCustomEffortHours] = useState('');
   const [customEffortComment, setCustomEffortComment] = useState('');
+
+  // Edit Existing Logged Effort Modal
+  const [editingEffort, setEditingEffort] = useState<LocalEffort | null>(null);
+  const [editEffortHours, setEditEffortHours] = useState('1.0');
+  const [editEffortDate, setEditEffortDate] = useState('');
+  const [editEffortComment, setEditEffortComment] = useState('');
+  const [isSavingEditEffort, setIsSavingEditEffort] = useState(false);
+  const [isDeletingEffort, setIsDeletingEffort] = useState(false);
 
   // Settings
   const [opUrl, setOpUrl] = useState('https://openproject.fingent.net');
@@ -499,6 +525,149 @@ export default function App() {
     setEffortSelectedTicket(null);
     setEffortModalComment('');
     showEphemeralNotice(`Logged ${hours}h for #${targetTicketId} (${syncedImmediately ? 'Synced with OP' : 'Saved locally'})`);
+  };
+
+  // --- Edit Existing Logged Effort Handlers ---
+  const handleOpenEditEffort = (effort: LocalEffort) => {
+    setEditingEffort(effort);
+    setEditEffortHours(String(effort.hours));
+    setEditEffortDate(effort.spentOn);
+    setEditEffortComment(effort.comment || '');
+  };
+
+  const handleSaveEditEffort = async () => {
+    if (!editingEffort) return;
+    const newHours = parseFloat(editEffortHours);
+    if (isNaN(newHours) || newHours <= 0) return;
+
+    setIsSavingEditEffort(true);
+    const hoursDuration = newHours % 1 === 0 
+      ? `PT${newHours}H` 
+      : `PT${Math.floor(newHours)}H${Math.round((newHours % 1) * 60)}M`;
+
+    const diff = newHours - editingEffort.hours;
+
+    const updatedEffort: LocalEffort = {
+      ...editingEffort,
+      hours: newHours,
+      comment: editEffortComment,
+      spentOn: editEffortDate,
+      pendingSync: true
+    };
+
+    // 1. Update IndexedDB and React state
+    await db.putEffort(updatedEffort);
+    setAllEfforts(prev => prev.map(e => e.id === updatedEffort.id ? updatedEffort : e));
+
+    // 2. Adjust spentTime on local ticket
+    if (editingEffort.workPackageId) {
+      const t = tickets.find(item => item.id === editingEffort.workPackageId);
+      if (t) {
+        const currentSpent = parseDurationToHours(t.spentTime);
+        const updatedSpent = Math.max(0, +(currentSpent + diff).toFixed(2));
+        const updatedTicket: LocalTicket = {
+          ...t,
+          spentTime: `PT${Math.floor(updatedSpent)}H${Math.round((updatedSpent % 1) * 60)}M`
+        };
+        await db.putTicket(updatedTicket);
+        setTickets(prev => prev.map(item => item.id === t.id ? updatedTicket : item));
+      }
+    }
+
+    // 3. Sync to OpenProject API if online and not a locally created ID
+    let synced = false;
+    const isLocalTempId = editingEffort.id.startsWith('effort_');
+
+    if (navigator.onLine && !isLocalTempId) {
+      try {
+        await OpenProjectService.updateTimeEntry(
+          editingEffort.id,
+          hoursDuration,
+          editEffortComment,
+          editEffortDate
+        );
+        updatedEffort.pendingSync = false;
+        await db.putEffort(updatedEffort);
+        setAllEfforts(prev => prev.map(e => e.id === updatedEffort.id ? { ...e, pendingSync: false } : e));
+        synced = true;
+      } catch (err) {
+        console.warn('[Effort] Remote edit sync failed, enqueuing:', err);
+      }
+    }
+
+    if (!synced) {
+      if (isLocalTempId) {
+        const queue = await db.getSyncQueue();
+        const targetQueueItem = queue.find(q => q.type === 'LOG_TIME' && q.id.includes(String(editingEffort.workPackageId)));
+        if (targetQueueItem) {
+          targetQueueItem.payload.hours = hoursDuration;
+          targetQueueItem.payload.comment = editEffortComment;
+          targetQueueItem.payload.date = editEffortDate;
+          await db.enqueueSyncItem(targetQueueItem);
+        }
+      } else {
+        await db.enqueueSyncItem({
+          id: `update_time_${editingEffort.id}_${Date.now()}`,
+          type: 'UPDATE_TIME',
+          payload: {
+            id: editingEffort.id,
+            hours: hoursDuration,
+            comment: editEffortComment,
+            date: editEffortDate
+          },
+          createdAt: new Date().toISOString(),
+          retryCount: 0
+        });
+      }
+    }
+
+    setIsSavingEditEffort(false);
+    setEditingEffort(null);
+    showEphemeralNotice(`Updated #${editingEffort.workPackageId} to ${newHours}h (${synced ? 'Synced with OP' : 'Saved locally'})`);
+  };
+
+  const handleDeleteEffort = async (effort: LocalEffort) => {
+    setIsDeletingEffort(true);
+
+    // 1. Remove from DB and React state
+    await db.deleteEffort(effort.id);
+    setAllEfforts(prev => prev.filter(e => e.id !== effort.id));
+
+    // 2. Adjust spentTime on local ticket
+    if (effort.workPackageId) {
+      const t = tickets.find(item => item.id === effort.workPackageId);
+      if (t) {
+        const currentSpent = parseDurationToHours(t.spentTime);
+        const updatedSpent = Math.max(0, +(currentSpent - effort.hours).toFixed(2));
+        const updatedTicket: LocalTicket = {
+          ...t,
+          spentTime: `PT${Math.floor(updatedSpent)}H${Math.round((updatedSpent % 1) * 60)}M`
+        };
+        await db.putTicket(updatedTicket);
+        setTickets(prev => prev.map(item => item.id === t.id ? updatedTicket : item));
+      }
+    }
+
+    // 3. Sync deletion to OpenProject
+    const isLocalTempId = effort.id.startsWith('effort_');
+    if (navigator.onLine && !isLocalTempId) {
+      try {
+        await OpenProjectService.deleteTimeEntry(effort.id);
+      } catch (err) {
+        console.warn('[Effort] Remote delete sync failed, enqueueing:', err);
+        await db.enqueueSyncItem({
+          id: `del_time_${effort.id}_${Date.now()}`,
+          type: 'DELETE_TIME',
+          payload: { id: effort.id },
+          createdAt: new Date().toISOString(),
+          retryCount: 0
+        });
+      }
+    }
+
+    setIsDeletingEffort(false);
+    setEditingEffort(null);
+    showEphemeralNotice(`Deleted ${effort.hours}h log for #${effort.workPackageId}`);
   };
 
   // --- Save Connection Settings ---
@@ -905,7 +1074,7 @@ export default function App() {
   }, [savedViews]);
 
   // --- Efforts Calculations & Global Effort Search ---
-  const weekDays = useMemo(() => getWeekDays(), []);
+  const weekDays = useMemo(() => getWorkWeekDays(weekOffset), [weekOffset]);
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
   const hoursPerDateMap = useMemo(() => {
@@ -1478,7 +1647,7 @@ export default function App() {
                     {searchedEfforts.map(e => (
                       <div 
                         key={e.id}
-                        className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs"
+                        className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs hover:border-slate-700 transition"
                       >
                         <div className="min-w-0 flex-1 pr-3">
                           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
@@ -1502,11 +1671,22 @@ export default function App() {
                           </div>
                           <span className="text-[#64748b] block truncate">{e.comment || 'Effort entry'}</span>
                         </div>
-                        <div className="text-right shrink-0">
-                          <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
-                          {e.pendingSync && (
-                            <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
-                          )}
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          <div className="text-right">
+                            <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
+                            {e.pendingSync && (
+                              <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditEffort(e)}
+                            className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
+                            title="Edit Logged Effort"
+                          >
+                            <Pencil className="w-3 h-3 text-blue-400" />
+                            <span>Edit</span>
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -1514,12 +1694,17 @@ export default function App() {
                 )}
               </div>
             ) : (
-              /* Normal Efforts View: Summary + 7-Day Strip + Selected Date Logs */
+              /* Normal Efforts View: Summary + 5-Day Work Week (Mon-Fri) + Selected Date Logs */
               <>
                 {/* Weekly Header Summary Card */}
                 <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-4 flex items-center justify-between">
                   <div>
-                    <span className="text-xs font-mono uppercase text-[#64748b] block mb-1">Weekly Effort Total</span>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-mono uppercase text-[#64748b]">Weekly Effort Total</span>
+                      <span className="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20">
+                        {getWeekRangeLabel(weekDays)}
+                      </span>
+                    </div>
                     <span className="text-2xl font-mono font-bold text-emerald-400">
                       {weeklyTotalHours.toFixed(1)} <span className="text-xs text-[#64748b] font-normal">hours</span>
                     </span>
@@ -1532,10 +1717,42 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 7-Day Interactive Strip */}
+                {/* 5-Day Work Week Interactive Strip (Mon to Fri, Saturday & Sunday Hidden) */}
                 <div>
-                  <span className="text-xs font-mono uppercase text-[#64748b] block mb-2">Past 7 Days</span>
-                  <div className="grid grid-cols-7 gap-1.5">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-mono uppercase text-[#64748b]">
+                      Work Week ({getWeekRangeLabel(weekDays)})
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {weekOffset !== 0 && (
+                        <button
+                          onClick={() => {
+                            setWeekOffset(0);
+                            setSelectedEffortDate(todayStr);
+                          }}
+                          className="text-[10px] font-mono text-blue-400 hover:text-blue-300 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 mr-1"
+                        >
+                          This Week
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setWeekOffset(prev => prev - 1)}
+                        className="px-2 py-1 rounded-lg bg-[#090d16] border border-[#1e293b] text-[#94a3b8] hover:text-white text-xs font-mono transition"
+                        title="Previous Week"
+                      >
+                        &larr; Prev
+                      </button>
+                      <button
+                        onClick={() => setWeekOffset(prev => prev + 1)}
+                        className="px-2 py-1 rounded-lg bg-[#090d16] border border-[#1e293b] text-[#94a3b8] hover:text-white text-xs font-mono transition"
+                        title="Next Week"
+                      >
+                        Next &rarr;
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-2">
                     {weekDays.map(d => {
                       const hours = hoursPerDateMap[d.dateStr] || 0;
                       const isSelected = d.dateStr === selectedEffortDate;
@@ -1543,15 +1760,15 @@ export default function App() {
                         <button
                           key={d.dateStr}
                           onClick={() => setSelectedEffortDate(d.dateStr)}
-                          className={`p-2 rounded-xl text-center border transition flex flex-col justify-between items-center ${
+                          className={`p-2.5 rounded-xl text-center border transition flex flex-col justify-between items-center ${
                             isSelected 
-                              ? 'bg-blue-600/20 border-blue-500 text-white' 
+                              ? 'bg-blue-600/20 border-blue-500 text-white shadow-sm ring-1 ring-blue-500/50' 
                               : 'bg-[#090d16] border-[#1e293b] text-[#64748b] hover:text-white'
                           }`}
                         >
-                          <span className="text-[10px] uppercase font-mono block">{d.dayName}</span>
-                          <span className="text-xs font-bold my-1 block">{d.label.split(' ')[0]}</span>
-                          <span className={`text-[10px] font-mono font-semibold ${hours > 0 ? 'text-emerald-400' : 'text-[#64748b]'}`}>
+                          <span className="text-[10px] uppercase font-mono font-semibold block">{d.dayName}</span>
+                          <span className="text-sm font-bold my-1 block">{d.label.split(' ')[0]}</span>
+                          <span className={`text-[11px] font-mono font-bold ${hours > 0 ? 'text-emerald-400' : 'text-[#64748b]'}`}>
                             {hours > 0 ? `${hours.toFixed(1)}h` : '-'}
                           </span>
                         </button>
@@ -1563,12 +1780,27 @@ export default function App() {
                 {/* Day's Effort Logs List */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono uppercase text-[#64748b]">
-                      Logs for {selectedEffortDate === todayStr ? 'Today' : selectedEffortDate}
-                    </span>
-                    <span className="text-xs font-mono text-emerald-400 font-bold">
-                      {(hoursPerDateMap[selectedEffortDate] || 0).toFixed(1)}h Total
-                    </span>
+                    <div>
+                      <span className="text-xs font-mono uppercase text-[#64748b] block">
+                        Logs for {selectedEffortDate === todayStr ? 'Today' : selectedEffortDate}
+                      </span>
+                      <span className="text-xs font-mono text-emerald-400 font-bold">
+                        {(hoursPerDateMap[selectedEffortDate] || 0).toFixed(1)}h Total
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setIsAddEffortModalOpen(true);
+                        setEffortModalDate(selectedEffortDate);
+                        setEffortTicketSearch('');
+                        setEffortSelectedTicket(null);
+                        setEffortTicketFetchError(null);
+                      }}
+                      className="px-2.5 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-mono font-medium inline-flex items-center gap-1.5 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Add Hours</span>
+                    </button>
                   </div>
 
                   {effortsForSelectedDate.length === 0 ? (
@@ -1593,7 +1825,7 @@ export default function App() {
                       {effortsForSelectedDate.map(e => (
                         <div 
                           key={e.id}
-                          className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs"
+                          className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs hover:border-slate-700 transition"
                         >
                           <div className="min-w-0 flex-1 pr-3">
                             <div className="flex items-center gap-1.5 mb-0.5">
@@ -1614,11 +1846,22 @@ export default function App() {
                             </div>
                             <span className="text-[#64748b] block truncate">{e.comment || 'Effort entry'}</span>
                           </div>
-                          <div className="text-right shrink-0">
-                            <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
-                            {e.pendingSync && (
-                              <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
-                            )}
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            <div className="text-right">
+                              <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
+                              {e.pendingSync && (
+                                <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditEffort(e)}
+                              className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
+                              title="Edit Logged Effort"
+                            >
+                              <Pencil className="w-3 h-3 text-blue-400" />
+                              <span>Edit</span>
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -2549,6 +2792,139 @@ export default function App() {
                   <Clock className="w-4 h-4" />
                   <span>{isLoggingEffort ? 'Logging Effort...' : `Confirm & Log ${parseFloat(effortModalHours) || 0}h`}</span>
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Existing Logged Effort Modal */}
+        {editingEffort && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            onClick={() => setEditingEffort(null)}
+          >
+            <div 
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[90vh] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-blue-400" />
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Edit Logged Effort</h3>
+                </div>
+                <button onClick={() => setEditingEffort(null)} className="p-1 text-[#64748b] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3.5 overflow-y-auto">
+                {/* Work package info */}
+                <div className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-blue-400">
+                      #{editingEffort.workPackageId}
+                    </span>
+                    <span className="text-xs text-[#f1f5f9] truncate font-medium">
+                      {editingEffort.ticketSubject || 'Work Package'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-[#64748b]">
+                    Original: {editingEffort.hours}h on {editingEffort.spentOn}
+                  </div>
+                </div>
+
+                {/* Hours presets & custom input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">
+                      Hours Spent
+                    </label>
+                    <span className="text-xs font-mono font-bold text-emerald-400">
+                      {parseFloat(editEffortHours) > 0 ? `${parseFloat(editEffortHours).toFixed(1)}h` : '0h'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1.5 mb-2">
+                    {['0.5', '1.0', '1.5', '2.0', '3.0', '4.0', '6.0', '8.0'].map(hrs => (
+                      <button
+                        key={hrs}
+                        type="button"
+                        onClick={() => setEditEffortHours(hrs)}
+                        className={`py-1.5 rounded-lg text-xs font-mono font-semibold transition ${
+                          editEffortHours === hrs
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-[#090d16] text-[#94a3b8] border border-[#1e293b] hover:border-slate-600'
+                        }`}
+                      >
+                        +{hrs}h
+                      </button>
+                    ))}
+                  </div>
+
+                  <input
+                    type="number"
+                    step="0.25"
+                    value={editEffortHours}
+                    onChange={e => setEditEffortHours(e.target.value)}
+                    placeholder="Custom hours (e.g. 1.25)"
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Spent on date */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1">
+                    Date Spent
+                  </label>
+                  <input
+                    type="date"
+                    value={editEffortDate}
+                    onChange={e => setEditEffortDate(e.target.value)}
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Comment */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1">
+                    Comment / Description
+                  </label>
+                  <input
+                    type="text"
+                    value={editEffortComment}
+                    onChange={e => setEditEffortComment(e.target.value)}
+                    placeholder="What did you work on?"
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Actions: Delete and Save */}
+                <div className="pt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isDeletingEffort || isSavingEditEffort}
+                    onClick={() => handleDeleteEffort(editingEffort)}
+                    className="p-3 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 text-red-400 rounded-xl text-xs font-mono font-medium flex items-center justify-center gap-1.5 transition"
+                    title="Delete Effort Log"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>{isDeletingEffort ? 'Deleting...' : 'Delete'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={parseFloat(editEffortHours) <= 0 || isSavingEditEffort || isDeletingEffort}
+                    onClick={handleSaveEditEffort}
+                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold font-mono flex items-center justify-center gap-2 transition shadow-lg shadow-blue-900/30"
+                  >
+                    {isSavingEditEffort ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Check className="w-4 h-4" />
+                    )}
+                    <span>{isSavingEditEffort ? 'Saving Changes...' : 'Save Changes'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

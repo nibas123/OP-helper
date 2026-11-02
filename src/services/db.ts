@@ -38,7 +38,7 @@ export interface LocalEffort {
 
 export interface SyncQueueItem {
   id: string;
-  type: 'UPDATE_STATUS' | 'UPDATE_ASSIGNEE' | 'LOG_TIME';
+  type: 'UPDATE_STATUS' | 'UPDATE_ASSIGNEE' | 'LOG_TIME' | 'UPDATE_TIME' | 'DELETE_TIME';
   payload: any;
   createdAt: string;
   retryCount: number;
@@ -345,6 +345,17 @@ class LocalDatabase {
       for (const e of efforts) {
         store.put(e);
       }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async deleteEffort(id: string): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('efforts', 'readwrite');
+      const store = tx.objectStore('efforts');
+      store.delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

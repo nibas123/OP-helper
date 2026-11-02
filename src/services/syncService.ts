@@ -65,6 +65,17 @@ export const syncService = {
               item.payload.date
             );
             await db.removeSyncItem(item.id);
+          } else if (item.type === 'UPDATE_TIME') {
+            await OpenProjectService.updateTimeEntry(
+              item.payload.id,
+              item.payload.hours,
+              item.payload.comment,
+              item.payload.date
+            );
+            await db.removeSyncItem(item.id);
+          } else if (item.type === 'DELETE_TIME') {
+            await OpenProjectService.deleteTimeEntry(item.payload.id);
+            await db.removeSyncItem(item.id);
           }
         } catch (err: any) {
           console.warn('[Sync] Failed to process queue item:', item.id, err);

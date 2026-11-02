@@ -234,6 +234,23 @@ export const OpenProjectService = {
     return response.data;
   },
 
+  updateTimeEntry: async (id: number | string, hours: string, comment: string, date: string) => {
+    const client = await getApiClient();
+    const payload: any = {
+      hours,
+      comment: { format: 'plain', raw: comment },
+      spentOn: date
+    };
+    const response = await client.patch(`/time_entries/${id}`, payload);
+    return response.data;
+  },
+
+  deleteTimeEntry: async (id: number | string) => {
+    const client = await getApiClient();
+    const response = await client.delete(`/time_entries/${id}`);
+    return response.data;
+  },
+
   addComment: async (id: number | string, comment: string, lockVersion: number) => {
     const client = await getApiClient();
     const payload = {
