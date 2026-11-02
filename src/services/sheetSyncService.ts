@@ -15,6 +15,98 @@ export interface SheetBackupData {
 }
 
 /**
+ * Validates the Google Apps Script Web App URL
+ */
+function validateSheetUrl(rawUrl: string): { valid: boolean; error?: string; cleanUrl: string } {
+  const clean = rawUrl.trim();
+  if (!clean) {
+    return { valid: false, error: 'Please enter a Google Apps Script Web App URL', cleanUrl: '' };
+  }
+  if (clean.includes('docs.google.com/spreadsheets')) {
+    return {
+      valid: false,
+      error: 'You pasted the Google Sheet spreadsheet link! You need the Apps Script Web App URL ending in /exec (Extensions > Apps Script > Deploy > Web app).',
+      cleanUrl: clean
+    };
+  }
+  if (!clean.startsWith('https://script.google.com/')) {
+    return {
+      valid: false,
+      error: 'URL must start with https://script.google.com/macros/s/.../exec',
+      cleanUrl: clean
+    };
+  }
+  if (clean.endsWith('/dev')) {
+    return {
+      valid: false,
+      error: 'You pasted the /dev test URL. Please use the production /exec URL from Deploy > New deployment.',
+      cleanUrl: clean
+    };
+  }
+  return { valid: true, cleanUrl: clean };
+}
+
+/**
+ * Universal request sender with automatic Edge CORS Proxy fallback
+ */
+async function sendToAppsScript(url: string, method: 'GET' | 'POST', body?: any): Promise<any> {
+  const options: RequestInit = {
+    method,
+    redirect: 'follow',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8'
+    }
+  };
+  if (body && method === 'POST') {
+    options.body = JSON.stringify(body);
+  }
+
+  // 1. Try Direct Fetch first
+  try {
+    const res = await fetch(url, options);
+    const text = await res.text();
+
+    if (text.includes('accounts.google.com') || text.includes('Sign in - Google Accounts')) {
+      throw new Error("Permission Denied: Ensure 'Who has access' is set to 'Anyone' in your Google Apps Script deployment.");
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (res.ok) {
+        return { status: 'SUCCESS' };
+      }
+      throw new Error(`Google Sheet returned invalid response: ${text.slice(0, 100)}`);
+    }
+  } catch (directErr: any) {
+    console.warn('[SheetSync] Direct fetch failed, trying Edge CORS proxy...', directErr.message);
+
+    // If permission error, don't retry proxy, rethrow directly
+    if (directErr.message && directErr.message.includes('Permission Denied')) {
+      throw directErr;
+    }
+
+    // 2. Fallback to serverless CORS proxy
+    const proxyUrl = `/api/proxy?endpoint=${encodeURIComponent(url)}`;
+    const proxyRes = await fetch(proxyUrl, options);
+    const proxyText = await proxyRes.text();
+
+    if (proxyText.includes('accounts.google.com') || proxyText.includes('Sign in - Google Accounts')) {
+      throw new Error("Permission Denied: Ensure 'Who has access' is set to 'Anyone' in your Google Apps Script deployment.");
+    }
+
+    try {
+      return JSON.parse(proxyText);
+    } catch {
+      if (proxyRes.ok) {
+        return { status: 'SUCCESS' };
+      }
+      throw new Error(`Proxy response error: ${proxyText.slice(0, 100)}`);
+    }
+  }
+}
+
+/**
  * Service to Dual-Sync and Restore state, views, tickets, and effort data with Google Sheets / Excel.
  */
 export const sheetSyncService = {
@@ -72,8 +164,9 @@ export const sheetSyncService = {
     currentUser: { id: string; name: string };
   }): Promise<{ success: boolean; message?: string }> {
     const sheetUrl = this.getSheetUrl();
-    if (!sheetUrl) {
-      return { success: false, message: 'Google Sheet Webhook URL not configured in Settings' };
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) {
+      return { success: false, message: validation.error };
     }
 
     try {
@@ -89,23 +182,9 @@ export const sheetSyncService = {
         efforts: data.efforts
       };
 
-      let fetchUrl = sheetUrl;
-      // If web browser CORS happens, can route through proxy or direct
-      const response = await fetch(fetchUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8' // Text/plain avoids CORS preflight OPTIONS in Apps Script
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      }
-
-      const resJson = await response.json();
-      if (resJson.status === 'ERROR') {
-        throw new Error(resJson.message || 'Sheet returned error');
+      const resJson = await sendToAppsScript(validation.cleanUrl, 'POST', payload);
+      if (resJson && resJson.status === 'ERROR') {
+        throw new Error(resJson.message || 'Google Apps Script reported an error');
       }
 
       const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -123,21 +202,13 @@ export const sheetSyncService = {
    */
   async restoreFromSheet(): Promise<{ success: boolean; data?: SheetBackupData; message?: string }> {
     const sheetUrl = this.getSheetUrl();
-    if (!sheetUrl) {
-      return { success: false, message: 'Google Sheet Webhook URL not configured' };
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) {
+      return { success: false, message: validation.error };
     }
 
     try {
-      let fetchUrl = sheetUrl;
-      const response = await fetch(fetchUrl, {
-        method: 'GET'
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      }
-
-      const json = await response.json();
+      const json = await sendToAppsScript(validation.cleanUrl, 'GET');
       if (json.status !== 'SUCCESS' || !json.data) {
         throw new Error(json.message || 'Invalid data returned from Google Sheet');
       }
@@ -182,17 +253,14 @@ export const sheetSyncService = {
    */
   async logEffortAsync(effort: LocalEffort, currentUser: { id: string; name: string }): Promise<void> {
     const sheetUrl = this.getSheetUrl();
-    if (!sheetUrl) return;
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) return;
 
     try {
-      await fetch(sheetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'LOG_EFFORT',
-          effort,
-          currentUser
-        })
+      await sendToAppsScript(validation.cleanUrl, 'POST', {
+        action: 'LOG_EFFORT',
+        effort,
+        currentUser
       });
     } catch (e) {
       console.warn('[SheetSync] Background log effort to sheet failed:', e);
@@ -204,16 +272,13 @@ export const sheetSyncService = {
    */
   async saveViewAsync(view: SavedView): Promise<void> {
     const sheetUrl = this.getSheetUrl();
-    if (!sheetUrl) return;
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) return;
 
     try {
-      await fetch(sheetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'SAVE_VIEW',
-          view
-        })
+      await sendToAppsScript(validation.cleanUrl, 'POST', {
+        action: 'SAVE_VIEW',
+        view
       });
     } catch (e) {
       console.warn('[SheetSync] Background save view to sheet failed:', e);
