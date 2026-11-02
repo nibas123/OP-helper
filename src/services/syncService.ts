@@ -1,5 +1,6 @@
 import { OpenProjectService } from './OpenProjectService';
 import { db, type LocalTicket, type LocalEffort } from './db';
+import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
 
 export interface SyncStatus {
   state: 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
@@ -323,10 +324,10 @@ export const syncService = {
   async searchRemoteAndCache(query: string): Promise<LocalTicket[]> {
     try {
       const trimmed = query.trim();
-      // If direct ID
-      const directId = parseInt(trimmed.replace(/^#/, ''), 10);
-      if (!isNaN(directId) && directId > 0) {
-        const single = await this.fetchAndCacheSingleTicket(directId);
+      // 1. Direct ID or OpenProject URL extraction (e.g. https://openproject.../work_packages/353351 or #353351)
+      const extractedId = extractTicketIdFromUrlOrText(trimmed) || parseInt(trimmed.replace(/^#/, ''), 10);
+      if (extractedId && !isNaN(extractedId) && extractedId > 0) {
+        const single = await this.fetchAndCacheSingleTicket(extractedId);
         if (single) return [single];
       }
 

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
 
 const STORAGE_KEYS = {
   URL: 'op_url',
@@ -153,8 +154,10 @@ export const OpenProjectService = {
   searchWorkPackages: async (query: string) => {
     const client = await getApiClient();
     const trimmed = query.trim();
-    // If it's a numeric ID, search by ID or subject
-    const filters = [{ "subjectOrId": { "operator": "**", "values": [trimmed] } }];
+    // If it's a URL or ticket reference, extract the clean ID
+    const extractedId = extractTicketIdFromUrlOrText(trimmed);
+    const searchTerm = extractedId ? String(extractedId) : trimmed.replace(/^#/, '');
+    const filters = [{ "subjectOrId": { "operator": "**", "values": [searchTerm] } }];
     const filterStr = JSON.stringify(filters);
     const response = await client.get(`/work_packages?filters=${encodeURIComponent(filterStr)}&pageSize=20`);
     return response.data;

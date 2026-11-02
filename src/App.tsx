@@ -317,15 +317,37 @@ export default function App() {
 
   // --- Remote Search (searches OP and stores locally) ---
   const handleRemoteSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const raw = searchQuery.trim();
+    if (!raw) return;
     setIsSearchingRemote(true);
     showEphemeralNotice('Searching OpenProject server...');
 
-    const results = await syncService.searchRemoteAndCache(searchQuery);
+    // 1. If it's a URL or direct ID reference, fetch and open directly
+    const extractedId = extractTicketIdFromUrlOrText(raw) || parseInt(raw.replace(/^#/, ''), 10);
+    if (extractedId && !isNaN(extractedId) && extractedId > 0) {
+      try {
+        const single = await syncService.fetchAndCacheSingleTicket(extractedId);
+        setIsSearchingRemote(false);
+        if (single) {
+          await loadLocalData();
+          setSelectedTicketId(extractedId);
+          showEphemeralNotice(`Found & opened #${extractedId}`);
+          return;
+        }
+      } catch (err) {
+        console.warn('[Search] Direct ID query failed, falling back:', err);
+      }
+    }
+
+    // 2. Keyword or fallback search
+    const results = await syncService.searchRemoteAndCache(raw);
     setIsSearchingRemote(false);
     await loadLocalData();
 
     if (results.length > 0) {
+      if (results.length === 1) {
+        setSelectedTicketId(results[0].id);
+      }
       showEphemeralNotice(`Found & stored ${results.length} ticket(s) locally`);
     } else {
       showEphemeralNotice('No tickets found on server');
@@ -835,9 +857,11 @@ export default function App() {
   const effortTicketSearchResults = useMemo(() => {
     const raw = effortTicketSearch.trim();
     if (!raw) return tickets.slice(0, 8);
+    const extractedId = extractTicketIdFromUrlOrText(raw);
     const cleanId = raw.replace(/^#/, '').toLowerCase();
     const q = raw.toLowerCase();
     return tickets.filter(t => 
+      (extractedId && t.id === extractedId) ||
       String(t.id).includes(cleanId) ||
       t.subject.toLowerCase().includes(q) ||
       t.project.toLowerCase().includes(q)
@@ -946,16 +970,25 @@ export default function App() {
   // --- Filtered & Sorted Tickets ---
   const filteredTickets = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
+    const extractedId = extractTicketIdFromUrlOrText(searchQuery);
 
     const result = tickets.filter(t => {
       // 1. Text Search Query (checks ID, Subject, Project, Assignee, AND Description/Body)
       if (q) {
-        const matchQuery = String(t.id).includes(q) || 
+        const cleanId = q.replace(/^#/, '');
+        const matchQuery = 
+          (extractedId && t.id === extractedId) ||
+          String(t.id).includes(cleanId) || 
           t.subject.toLowerCase().includes(q) || 
           t.project.toLowerCase().includes(q) ||
           t.assignee.toLowerCase().includes(q) ||
           (t.description && t.description.toLowerCase().includes(q));
         if (!matchQuery) return false;
+      }
+
+      // If user directly queried by Ticket ID or pasted Ticket URL, bypass other filters so it's always shown
+      if (extractedId && t.id === extractedId) {
+        return true;
       }
 
       // 2. Starred Only
@@ -2529,160 +2562,154 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-1.5">
-                        <div className="relative flex-1">
-                          <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
-                          <input
-                            type="text"
-                            autoFocus
-                            value={effortTicketSearch}
-                            onChange={e => {
-                              setEffortTicketSearch(e.target.value);
-                              setEffortTicketFetchError(null);
-                            }}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                const raw = effortTicketSearch.trim().replace(/^#/, '');
-                                const parsedId = parseInt(raw, 10);
-                                if (!isNaN(parsedId) && parsedId > 0) {
-                                  fetchTicketForEffort(parsedId);
-                                } else if (effortTicketSearch.trim()) {
-                                  handleRemoteSearchForEffort(effortTicketSearch.trim());
-                                }
-                              }
-                            }}
-                            placeholder="Enter ticket #ID or search title..."
-                            className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
-                          />
-                          {effortTicketSearch && (
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                setEffortTicketSearch('');
+                  ) : (() => {
+                    const effortTargetId = extractTicketIdFromUrlOrText(effortTicketSearch.trim()) || parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10);
+                    const hasValidTargetId = !isNaN(effortTargetId) && effortTargetId > 0;
+
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <div className="relative flex-1">
+                            <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                            <input
+                              type="text"
+                              autoFocus
+                              value={effortTicketSearch}
+                              onChange={e => {
+                                setEffortTicketSearch(e.target.value);
                                 setEffortTicketFetchError(null);
                               }}
-                              className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Quick Fetch or Search Button */}
-                        {parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10) > 0 ? (
-                          <button
-                            type="button"
-                            disabled={isFetchingEffortTicket}
-                            onClick={() => {
-                              const parsedId = parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10);
-                              fetchTicketForEffort(parsedId);
-                            }}
-                            className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition shadow-sm"
-                          >
-                            {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Fetch Details'}
-                          </button>
-                        ) : effortTicketSearch.trim().length >= 2 ? (
-                          <button
-                            type="button"
-                            disabled={isFetchingEffortTicket}
-                            onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
-                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition"
-                          >
-                            {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Search Server'}
-                          </button>
-                        ) : null}
-                      </div>
-
-                      {/* Loading status */}
-                      {isFetchingEffortTicket && (
-                        <div className="p-3 bg-[#090d16] border border-blue-500/20 rounded-xl flex items-center justify-center gap-2 text-xs font-mono text-blue-400">
-                          <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
-                          <span>Querying OpenProject server...</span>
-                        </div>
-                      )}
-
-                      {/* Error feedback */}
-                      {effortTicketFetchError && (
-                        <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl flex items-start gap-2 text-xs text-red-300">
-                          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                          <div className="flex-1">
-                            <span>{effortTicketFetchError}</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Matching Tickets List */}
-                      <div className="max-h-40 overflow-y-auto divide-y divide-[#1e293b] border border-[#1e293b] rounded-xl bg-[#090d16]">
-                        {/* If numeric search, always give direct server query option at the top */}
-                        {parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10) > 0 && (
-                          <div 
-                            onClick={() => {
-                              const parsedId = parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10);
-                              fetchTicketForEffort(parsedId);
-                            }}
-                            className="p-2.5 bg-blue-950/20 hover:bg-blue-900/30 cursor-pointer transition text-xs flex items-center justify-between text-blue-300 border-b border-[#1e293b]"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <Search className="w-3.5 h-3.5 text-blue-400" />
-                              <span className="font-mono font-semibold">Query OpenProject for #{effortTicketSearch.trim().replace(/^#/, '')}</span>
-                            </div>
-                            <span className="text-[10px] font-mono text-blue-400">Fetch details &rarr;</span>
-                          </div>
-                        )}
-
-                        {effortTicketSearchResults.map(t => (
-                          <div
-                            key={t.id}
-                            onClick={() => setEffortSelectedTicket(t)}
-                            className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between"
-                          >
-                            <div className="truncate pr-2">
-                              <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
-                              <span className="text-slate-300 font-medium">{t.subject}</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                                {t.status}
-                              </span>
-                              <span className="text-[10px] font-mono text-[#64748b] truncate max-w-[100px]">{t.project}</span>
-                            </div>
-                          </div>
-                        ))}
-
-                        {effortTicketSearchResults.length === 0 && !isFetchingEffortTicket && effortTicketSearch && (
-                          <div className="p-4 text-center text-xs text-[#64748b] space-y-2">
-                            <div>No cached ticket found in local storage.</div>
-                            {parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10) > 0 ? (
-                              <button
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  if (hasValidTargetId) {
+                                    fetchTicketForEffort(effortTargetId);
+                                  } else if (effortTicketSearch.trim()) {
+                                    handleRemoteSearchForEffort(effortTicketSearch.trim());
+                                  }
+                                }
+                              }}
+                              placeholder="Enter ticket #ID, URL, or search title..."
+                              className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                            />
+                            {effortTicketSearch && (
+                              <button 
                                 type="button"
-                                disabled={isFetchingEffortTicket}
                                 onClick={() => {
-                                  const id = parseInt(effortTicketSearch.trim().replace(/^#/, ''), 10);
-                                  fetchTicketForEffort(id);
+                                  setEffortTicketSearch('');
+                                  setEffortTicketFetchError(null);
                                 }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
+                                className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
                               >
-                                <Search className="w-3.5 h-3.5" />
-                                Query Ticket #{effortTicketSearch.trim().replace(/^#/, '')} from OpenProject
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isFetchingEffortTicket}
-                                onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
-                              >
-                                <Search className="w-3.5 h-3.5" />
-                                Search OpenProject for "{effortTicketSearch.trim()}"
+                                <X className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </div>
+
+                          {/* Quick Fetch or Search Button */}
+                          {hasValidTargetId ? (
+                            <button
+                              type="button"
+                              disabled={isFetchingEffortTicket}
+                              onClick={() => fetchTicketForEffort(effortTargetId)}
+                              className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition shadow-sm"
+                            >
+                              {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Fetch Details'}
+                            </button>
+                          ) : effortTicketSearch.trim().length >= 2 ? (
+                            <button
+                              type="button"
+                              disabled={isFetchingEffortTicket}
+                              onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
+                              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition"
+                            >
+                              {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Search Server'}
+                            </button>
+                          ) : null}
+                        </div>
+
+                        {/* Loading status */}
+                        {isFetchingEffortTicket && (
+                          <div className="p-3 bg-[#090d16] border border-blue-500/20 rounded-xl flex items-center justify-center gap-2 text-xs font-mono text-blue-400">
+                            <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                            <span>Querying OpenProject server...</span>
+                          </div>
                         )}
+
+                        {/* Error feedback */}
+                        {effortTicketFetchError && (
+                          <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl flex items-start gap-2 text-xs text-red-300">
+                            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                            <div className="flex-1">
+                              <span>{effortTicketFetchError}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Matching Tickets List */}
+                        <div className="max-h-40 overflow-y-auto divide-y divide-[#1e293b] border border-[#1e293b] rounded-xl bg-[#090d16]">
+                          {/* If numeric ID or OP URL, provide direct query option at the top */}
+                          {hasValidTargetId && (
+                            <div 
+                              onClick={() => fetchTicketForEffort(effortTargetId)}
+                              className="p-2.5 bg-blue-950/20 hover:bg-blue-900/30 cursor-pointer transition text-xs flex items-center justify-between text-blue-300 border-b border-[#1e293b]"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <Search className="w-3.5 h-3.5 text-blue-400" />
+                                <span className="font-mono font-semibold">Query OpenProject for #{effortTargetId}</span>
+                              </div>
+                              <span className="text-[10px] font-mono text-blue-400">Fetch details &rarr;</span>
+                            </div>
+                          )}
+
+                          {effortTicketSearchResults.map(t => (
+                            <div
+                              key={t.id}
+                              onClick={() => setEffortSelectedTicket(t)}
+                              className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between"
+                            >
+                              <div className="truncate pr-2">
+                                <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
+                                <span className="text-slate-300 font-medium">{t.subject}</span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                  {t.status}
+                                </span>
+                                <span className="text-[10px] font-mono text-[#64748b] truncate max-w-[100px]">{t.project}</span>
+                              </div>
+                            </div>
+                          ))}
+
+                          {effortTicketSearchResults.length === 0 && !isFetchingEffortTicket && effortTicketSearch && (
+                            <div className="p-4 text-center text-xs text-[#64748b] space-y-2">
+                              <div>No cached ticket found in local storage.</div>
+                              {hasValidTargetId ? (
+                                <button
+                                  type="button"
+                                  disabled={isFetchingEffortTicket}
+                                  onClick={() => fetchTicketForEffort(effortTargetId)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
+                                >
+                                  <Search className="w-3.5 h-3.5" />
+                                  Query Ticket #{effortTargetId} from OpenProject
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={isFetchingEffortTicket}
+                                  onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
+                                >
+                                  <Search className="w-3.5 h-3.5" />
+                                  Search OpenProject for "{effortTicketSearch.trim()}"
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
 
                 {/* 2. Hours Presets & Custom Input */}
