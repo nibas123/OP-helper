@@ -354,6 +354,51 @@ export default function App() {
     }
   };
 
+  // --- Auto-Search OpenProject Server with Debounce (for tickets not yet cached) ---
+  useEffect(() => {
+    const raw = searchQuery.trim();
+    if (!raw) return;
+
+    const extractedId = extractTicketIdFromUrlOrText(raw);
+    const hasLocalMatch = tickets.some(t => 
+      (extractedId && t.id === extractedId) ||
+      t.subject.toLowerCase().includes(raw.toLowerCase()) ||
+      String(t.id).includes(raw.replace(/^#/, ''))
+    );
+
+    // If already found locally, no need to auto-trigger remote query
+    if (hasLocalMatch) return;
+
+    // Only auto-trigger if it has an extracted ID or at least 3 characters
+    if (!extractedId && raw.length < 3) return;
+
+    const timer = setTimeout(() => {
+      handleRemoteSearch();
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, tickets]);
+
+  // --- Auto-fetch for Log Effort modal when typing/pasting a ticket ID or URL ---
+  useEffect(() => {
+    if (!isAddEffortModalOpen || effortSelectedTicket) return;
+    const raw = effortTicketSearch.trim();
+    if (!raw) return;
+
+    const extractedId = extractTicketIdFromUrlOrText(raw) || parseInt(raw.replace(/^#/, ''), 10);
+    if (extractedId && !isNaN(extractedId) && extractedId > 0) {
+      const local = tickets.find(t => t.id === extractedId && t.subject && !t.subject.startsWith('Ticket #'));
+      if (local) {
+        setEffortSelectedTicket(local);
+        return;
+      }
+      const timer = setTimeout(() => {
+        fetchTicketForEffort(extractedId);
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [effortTicketSearch, isAddEffortModalOpen, effortSelectedTicket, tickets]);
+
   // --- Toggle Star (Daily Task) ---
   const handleToggleStar = async (e: React.MouseEvent, ticketId: number) => {
     e.stopPropagation();
@@ -430,7 +475,7 @@ export default function App() {
     try {
       // 1. Check local DB first
       let ticket = await db.getTicket(targetId);
-      if (!ticket) {
+      if (!ticket || !ticket.subject || ticket.subject.startsWith('Ticket #')) {
         // 2. Query OpenProject server directly
         ticket = await syncService.fetchAndCacheSingleTicket(targetId);
       }
@@ -986,8 +1031,8 @@ export default function App() {
         if (!matchQuery) return false;
       }
 
-      // If user directly queried by Ticket ID or pasted Ticket URL, bypass other filters so it's always shown
-      if (extractedId && t.id === extractedId) {
+      // If user typed a search query (ID, URL, or keyword), show all search matches across projects & assignees
+      if (q) {
         return true;
       }
 
@@ -1129,12 +1174,16 @@ export default function App() {
     return allEfforts.filter(e => e.spentOn === selectedEffortDate);
   }, [allEfforts, selectedEffortDate]);
 
-  // Global search across all efforts (subject, comment, #ID, date)
+  // Global search across all efforts (subject, comment, #ID, date, OR full OpenProject URL)
   const searchedEfforts = useMemo(() => {
-    const q = effortSearchQuery.toLowerCase().trim();
-    if (!q) return null;
+    const raw = effortSearchQuery.trim();
+    if (!raw) return null;
+    const extractedId = extractTicketIdFromUrlOrText(raw);
+    const cleanId = raw.replace(/^#/, '').toLowerCase();
+    const q = raw.toLowerCase();
     return allEfforts.filter(e => 
-      String(e.workPackageId).includes(q) ||
+      (extractedId && e.workPackageId === extractedId) ||
+      String(e.workPackageId).includes(cleanId) ||
       (e.ticketSubject && e.ticketSubject.toLowerCase().includes(q)) ||
       (e.comment && e.comment.toLowerCase().includes(q)) ||
       (e.spentOn && e.spentOn.includes(q))
@@ -1293,11 +1342,11 @@ export default function App() {
                 <button
                   onClick={handleRemoteSearch}
                   disabled={isSearchingRemote}
-                  className="bg-blue-600 hover:bg-blue-500 text-white text-xs px-2.5 py-2 rounded-xl font-medium shrink-0 flex items-center gap-1 transition"
+                  className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs px-2.5 py-2 rounded-xl font-medium shrink-0 flex items-center gap-1 transition shadow-sm font-mono"
                   title="Search OpenProject Server directly and store result locally"
                 >
                   <Globe className={`w-3.5 h-3.5 ${isSearchingRemote ? 'animate-spin' : ''}`} />
-                  <span>OP</span>
+                  <span>{isSearchingRemote ? '...' : extractTicketIdFromUrlOrText(searchQuery) ? `#${extractTicketIdFromUrlOrText(searchQuery)}` : 'Search OP'}</span>
                 </button>
               )}
 
@@ -1514,32 +1563,45 @@ export default function App() {
             {filteredTickets.length === 0 ? (
               <div className="p-8 text-center space-y-3">
                 <FolderKanban className="w-8 h-8 text-[#64748b] mx-auto opacity-50" />
-                <p className="text-xs text-[#64748b]">No tickets match your search or filters.</p>
-                <div className="flex justify-center gap-2">
-                  <button 
-                    onClick={() => {
-                      setFilterProjects([]);
-                      setFilterStatuses([]);
-                      setFilterStatusCategory('all');
-                      setFilterType('');
-                      setFilterAssignee('');
-                      setFilterPriority('');
-                      setFilterStarredOnly(false);
-                      setSearchQuery('');
-                    }}
-                    className="text-xs bg-[#1e293b] hover:bg-[#334155] text-slate-200 px-3 py-1.5 rounded-xl font-medium transition"
-                  >
-                    Reset Filters
-                  </button>
-                  {searchQuery && (
-                    <button
-                      onClick={handleRemoteSearch}
-                      className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl font-medium transition"
-                    >
-                      Search OP Server
-                    </button>
-                  )}
-                </div>
+                {isSearchingRemote ? (
+                  <div className="space-y-1">
+                    <p className="text-xs text-blue-400 font-mono flex items-center justify-center gap-1.5">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                      <span>Querying OpenProject server for "{searchQuery}"...</span>
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-[#64748b]">No tickets match "{searchQuery || 'your filters'}".</p>
+                    <div className="flex justify-center gap-2 flex-wrap">
+                      <button 
+                        onClick={() => {
+                          setFilterProjects([]);
+                          setFilterStatuses([]);
+                          setFilterStatusCategory('all');
+                          setFilterType('');
+                          setFilterAssignee('');
+                          setFilterPriority('');
+                          setFilterStarredOnly(false);
+                          setSearchQuery('');
+                        }}
+                        className="text-xs bg-[#1e293b] hover:bg-[#334155] text-slate-200 px-3 py-1.5 rounded-xl font-medium transition"
+                      >
+                        Reset Filters
+                      </button>
+                      {searchQuery && (
+                        <button
+                          onClick={handleRemoteSearch}
+                          disabled={isSearchingRemote}
+                          className="text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-xl font-medium transition inline-flex items-center gap-1.5"
+                        >
+                          <Globe className={`w-3.5 h-3.5 ${isSearchingRemote ? 'animate-spin' : ''}`} />
+                          <span>Search OP Server {extractTicketIdFromUrlOrText(searchQuery) ? `for #${extractTicketIdFromUrlOrText(searchQuery)}` : ''}</span>
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               filteredTickets.map((t) => (

@@ -8,6 +8,11 @@ export function extractTicketIdFromUrlOrText(input: string | null | undefined): 
   if (!input) return null;
   const decoded = decodeURIComponent(input.trim());
 
+  // Avoid treating date strings (e.g. 2026-10-27) as ticket IDs
+  if (/^\d{4}-\d{2}-\d{2}$/.test(decoded)) {
+    return null;
+  }
+
   // 1. Match /(work_packages|tickets|wp)/<id> (case insensitive)
   const wpMatch = decoded.match(/(?:work_packages|tickets|wp)\/(\d+)/i);
   if (wpMatch && wpMatch[1]) {
