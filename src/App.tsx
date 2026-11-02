@@ -253,6 +253,30 @@ export default function App() {
   const [isViewsMenuOpen, setIsViewsMenuOpen] = useState(false);
   const [isSaveViewModalOpen, setIsSaveViewModalOpen] = useState(false);
   const [newViewName, setNewViewName] = useState('');
+
+  // Mobile virtual keyboard height management via window.visualViewport
+  const [visualViewportHeight, setVisualViewportHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.visualViewport) return;
+
+    const handleResize = () => {
+      if (window.visualViewport) {
+        setVisualViewportHeight(Math.round(window.visualViewport.height));
+      }
+    };
+
+    handleResize();
+    window.visualViewport.addEventListener('resize', handleResize);
+    window.visualViewport.addEventListener('scroll', handleResize);
+
+    return () => {
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleResize);
+        window.visualViewport.removeEventListener('scroll', handleResize);
+      }
+    };
+  }, []);
   const [newViewFavorite, setNewViewFavorite] = useState(true);
 
   // Sync state
@@ -1312,7 +1336,13 @@ export default function App() {
     <div className="min-h-screen bg-[#090d16] text-[#f1f5f9] flex justify-center selection:bg-blue-600/30 font-sans">
       
       {/* Mobile Frame Container */}
-      <div className="w-full max-w-md bg-[#0f172a] sm:border sm:border-[#1e293b] sm:rounded-3xl sm:my-4 sm:shadow-2xl flex flex-col h-screen sm:h-[860px] overflow-hidden relative">
+      <div 
+        style={{
+          height: visualViewportHeight ? `${visualViewportHeight}px` : undefined,
+          maxHeight: visualViewportHeight ? `${visualViewportHeight}px` : undefined
+        }}
+        className="w-full max-w-md bg-[#0f172a] sm:border sm:border-[#1e293b] sm:rounded-3xl sm:my-4 sm:shadow-2xl flex flex-col h-[100dvh] max-h-[100dvh] sm:h-[860px] overflow-hidden relative"
+      >
 
         {/* Top Header */}
         <header className="p-3.5 border-b border-[#1e293b] bg-[#0f172a]/95 backdrop-blur-md sticky top-0 z-20 flex items-center justify-between shrink-0">
@@ -2098,6 +2128,7 @@ export default function App() {
               <input 
                 type="text" 
                 value={opUrl}
+                onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                 onChange={e => setOpUrl(e.target.value)}
                 className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
               />
@@ -2107,6 +2138,7 @@ export default function App() {
               <input 
                 type="password" 
                 value={opApiKey}
+                onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                 onChange={e => setOpApiKey(e.target.value)}
                 placeholder="Enter OpenProject API key..."
                 className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
@@ -2413,10 +2445,13 @@ export default function App() {
         {/* Searchable Multi-Project Picker Modal (Filter Drawer) */}
         {isProjectPickerOpen && (
           <div 
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
             onClick={() => setIsProjectPickerOpen(false)}
           >
             <div 
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 600)}px` : undefined
+              }}
               className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
@@ -2513,10 +2548,13 @@ export default function App() {
         {/* Searchable Assignee Picker Modal (Filter Drawer) */}
         {isDrawerAssigneePickerOpen && (
           <div 
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
             onClick={() => setIsDrawerAssigneePickerOpen(false)}
           >
             <div 
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 600)}px` : undefined
+              }}
               className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
@@ -2649,11 +2687,14 @@ export default function App() {
         {/* Direct Add Effort Popup (Search Tickets by Number & Log Effort) */}
         {isAddEffortModalOpen && (
           <div 
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
             onClick={() => setIsAddEffortModalOpen(false)}
           >
             <div 
-              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[90vh] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 640)}px` : undefined
+              }}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[92%] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
               <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
@@ -2666,7 +2707,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-3.5 overflow-y-auto">
+              <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain pb-12">
                 {/* 1. Ticket Selector / Searcher */}
                 <div>
                   <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1">
@@ -2749,8 +2790,8 @@ export default function App() {
                             <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
                             <input
                               type="text"
-                              autoFocus
                               value={effortTicketSearch}
+                              onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                               onChange={e => {
                                 setEffortTicketSearch(e.target.value);
                                 setEffortTicketFetchError(null);
@@ -2920,6 +2961,7 @@ export default function App() {
                     type="number"
                     step="0.25"
                     value={effortModalHours}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                     onChange={e => setEffortModalHours(e.target.value)}
                     placeholder="Custom hours (e.g. 1.25)"
                     className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -2969,6 +3011,7 @@ export default function App() {
                   <input
                     type="text"
                     value={effortModalComment}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                     onChange={e => setEffortModalComment(e.target.value)}
                     placeholder="What did you work on? (e.g. Bugfix, code review, meeting)"
                     className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -3003,11 +3046,14 @@ export default function App() {
         {/* Edit Existing Logged Effort Modal */}
         {editingEffort && (
           <div 
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
             onClick={() => setEditingEffort(null)}
           >
             <div 
-              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[90vh] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 640)}px` : undefined
+              }}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[92%] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
               <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
@@ -3020,7 +3066,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-3.5 overflow-y-auto">
+              <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain pb-12">
                 {/* Work package info */}
                 <div className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-1">
                   <div className="flex items-center gap-2">
@@ -3068,6 +3114,7 @@ export default function App() {
                     type="number"
                     step="0.25"
                     value={editEffortHours}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                     onChange={e => setEditEffortHours(e.target.value)}
                     placeholder="Custom hours (e.g. 1.25)"
                     className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -3095,6 +3142,7 @@ export default function App() {
                   <input
                     type="text"
                     value={editEffortComment}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                     onChange={e => setEditEffortComment(e.target.value)}
                     placeholder="What did you work on?"
                     className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -3135,8 +3183,13 @@ export default function App() {
 
         {/* Save View Modal (OpenProject View Feature) */}
         {isSaveViewModalOpen && (
-          <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full max-w-sm p-4 space-y-3.5 shadow-2xl">
+          <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in overflow-hidden">
+            <div 
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 480)}px` : undefined
+              }}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full max-w-sm p-4 space-y-3.5 shadow-2xl overflow-y-auto"
+            >
               <div className="flex items-center justify-between border-b border-[#1e293b] pb-2">
                 <div className="flex items-center gap-2">
                   <Bookmark className="w-4 h-4 text-blue-400" />
@@ -3152,6 +3205,7 @@ export default function App() {
                 <input
                   type="text"
                   value={newViewName}
+                  onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                   onChange={e => setNewViewName(e.target.value)}
                   placeholder="e.g. D365 & James Team Bugs..."
                   className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500"
@@ -3372,6 +3426,7 @@ export default function App() {
                       type="number"
                       step="0.25"
                       value={customEffortHours}
+                      onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                       onChange={e => setCustomEffortHours(e.target.value)}
                       placeholder="Hours (e.g. 1.5)"
                       className="w-28 bg-[#0f172a] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -3379,6 +3434,7 @@ export default function App() {
                     <input
                       type="text"
                       value={customEffortComment}
+                      onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
                       onChange={e => setCustomEffortComment(e.target.value)}
                       placeholder="Work comment..."
                       className="flex-1 bg-[#0f172a] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500"
@@ -3408,10 +3464,13 @@ export default function App() {
         {/* Searchable Assignee Picker Modal (for Ticket Reassignment) */}
         {isAssigneePickerOpen && selectedTicket && (
           <div 
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
             onClick={() => setIsAssigneePickerOpen(false)}
           >
             <div 
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 600)}px` : undefined
+              }}
               className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
