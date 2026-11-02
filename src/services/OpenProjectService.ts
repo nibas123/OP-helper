@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
 
 const DEFAULT_URL = 'https://openproject.fingent.net';
 
+const attachmentBlobCache = new Map<string, string>();
+
 /**
  * Utility to get credentials from localStorage or chrome.storage
  */
@@ -280,5 +282,60 @@ export const OpenProjectService = {
       }
     });
     return response.data;
+  },
+
+  /**
+   * Fetches an attachment with OpenProject Basic Auth headers,
+   * detects its image format, and converts to an in-memory blob URL.
+   */
+  getAttachmentBlobUrl: async (pathOrUrl: string): Promise<string> => {
+    if (!pathOrUrl) return '';
+    if (pathOrUrl.startsWith('blob:') || pathOrUrl.startsWith('data:')) {
+      return pathOrUrl;
+    }
+
+    const creds = await getCredentials();
+    const baseUrl = (creds.url || DEFAULT_URL).replace(/\/+$/, '');
+    let fullUrl = pathOrUrl;
+
+    if (pathOrUrl.startsWith('/')) {
+      fullUrl = `${baseUrl}${pathOrUrl}`;
+    } else if (!pathOrUrl.startsWith('http://') && !pathOrUrl.startsWith('https://')) {
+      fullUrl = `${baseUrl}/${pathOrUrl}`;
+    }
+
+    if (attachmentBlobCache.has(fullUrl)) {
+      return attachmentBlobCache.get(fullUrl)!;
+    }
+
+    const headers: Record<string, string> = {};
+    const isOpEndpoint = fullUrl.startsWith(baseUrl) || fullUrl.includes('/api/v3/attachments/');
+    if (isOpEndpoint && creds.apiKey) {
+      const token = btoa(`apikey:${creds.apiKey}`);
+      headers['Authorization'] = `Basic ${token}`;
+    }
+
+    const response = await fetch(fullUrl, { headers });
+    if (!response.ok) {
+      throw new Error(`Failed to load attachment: HTTP ${response.status} ${response.statusText}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer.slice(0, 8));
+    let mime = 'image/png';
+    if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      mime = 'image/jpeg';
+    } else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+      mime = 'image/gif';
+    } else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+      mime = 'image/webp';
+    } else if (bytes[0] === 0x3c && (bytes[1] === 0x73 || bytes[1] === 0x3f)) {
+      mime = 'image/svg+xml';
+    }
+
+    const blob = new Blob([buffer], { type: mime });
+    const blobUrl = URL.createObjectURL(blob);
+    attachmentBlobCache.set(fullUrl, blobUrl);
+    return blobUrl;
   }
 };
