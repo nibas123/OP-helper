@@ -76,11 +76,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchingRemote, setIsSearchingRemote] = useState(false);
 
-  // Multi-Attribute Filter Drawer (OP-Style)
+  // Multi-Attribute Filter Drawer (OP-Style with Multi-Project & Multi-Status support)
   const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
-  const [filterProject, setFilterProject] = useState<string>(''); // Project Name or ID
+  const [filterProjects, setFilterProjects] = useState<string[]>([]); // Multiple selected projects
+  const [filterStatuses, setFilterStatuses] = useState<string[]>([]); // Multiple selected status IDs
   const [filterStatusCategory, setFilterStatusCategory] = useState<'all' | 'open' | 'closed'>('open');
-  const [filterStatus, setFilterStatus] = useState<string>(''); // Specific Status ID
   const [filterType, setFilterType] = useState<string>('');
   const [filterAssignee, setFilterAssignee] = useState<string>(''); // 'all' | 'me' | 'unassigned' | specific ID
   const [filterPriority, setFilterPriority] = useState<string>('');
@@ -102,6 +102,15 @@ export default function App() {
   // Searchable Assignee Picker Modal in Filter Drawer
   const [isDrawerAssigneePickerOpen, setIsDrawerAssigneePickerOpen] = useState(false);
   const [drawerAssigneePickerSearch, setDrawerAssigneePickerSearch] = useState('');
+
+  // Direct Add Effort Modal (search ticket by number & log effort popup)
+  const [isAddEffortModalOpen, setIsAddEffortModalOpen] = useState(false);
+  const [effortTicketSearch, setEffortTicketSearch] = useState('');
+  const [effortSelectedTicket, setEffortSelectedTicket] = useState<LocalTicket | null>(null);
+  const [effortModalHours, setEffortModalHours] = useState('1.0');
+  const [effortModalDate, setEffortModalDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [effortModalComment, setEffortModalComment] = useState('');
+  const [isLoggingEffort, setIsLoggingEffort] = useState(false);
 
   // Saved Views State (OpenProject Views feature)
   const [savedViews, setSavedViews] = useState<SavedView[]>(DEFAULT_SAVED_VIEWS);
@@ -361,55 +370,82 @@ export default function App() {
     }
   };
 
-  // --- Log Effort ---
-  const handleLogEffort = async (hours: number, comment: string) => {
-    if (!selectedTicket || hours <= 0) return;
+  // --- Universal Log Effort Handler (used by Ticket Details & Direct Popup) ---
+  const handleLogEffortDirect = async (
+    targetTicketId: number, 
+    ticketSubject: string, 
+    hours: number, 
+    dateStr: string, 
+    comment: string
+  ) => {
+    if (!targetTicketId || hours <= 0) return;
+    setIsLoggingEffort(true);
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const hoursDuration = hours % 1 === 0 ? `PT${hours}H` : `PT${Math.floor(hours)}H${Math.round((hours % 1) * 60)}M`;
     const newEffort: LocalEffort = {
       id: `effort_${Date.now()}`,
-      workPackageId: selectedTicket.id,
-      ticketSubject: selectedTicket.subject,
+      workPackageId: targetTicketId,
+      ticketSubject: ticketSubject || `Ticket #${targetTicketId}`,
       hours: hours,
       comment: comment || 'Effort logged via OP Mobile',
-      spentOn: todayStr,
+      spentOn: dateStr,
       createdAt: new Date().toISOString(),
       pendingSync: true
     };
 
+    // Update local efforts in DB & state
     await db.putEffort(newEffort);
     setAllEfforts(prev => [newEffort, ...prev]);
 
-    const currentSpent = parseDurationToHours(selectedTicket.spentTime);
-    const newSpent = +(currentSpent + hours).toFixed(2);
-    const updatedTicket: LocalTicket = {
-      ...selectedTicket,
-      spentTime: `PT${Math.floor(newSpent)}H${Math.round((newSpent % 1) * 60)}M`,
-      pendingSync: true
-    };
-    await db.putTicket(updatedTicket);
-    setTickets(prev => prev.map(t => t.id === selectedTicket.id ? updatedTicket : t));
-
-    await db.enqueueSyncItem({
-      id: `time_${selectedTicket.id}_${Date.now()}`,
-      type: 'LOG_TIME',
-      payload: {
-        ticketId: selectedTicket.id,
-        hours: `PT${Math.floor(hours)}H${Math.round((hours % 1) * 60)}M`,
-        comment: newEffort.comment,
-        date: todayStr
-      },
-      createdAt: new Date().toISOString(),
-      retryCount: 0
-    });
-
-    setCustomEffortHours('');
-    setCustomEffortComment('');
-    showEphemeralNotice(`Logged ${hours}h locally`);
-
-    if (navigator.onLine) {
-      handleSync();
+    // Update spentTime on local ticket if present
+    const t = tickets.find(ticket => ticket.id === targetTicketId);
+    if (t) {
+      const currentSpent = parseDurationToHours(t.spentTime);
+      const newSpent = +(currentSpent + hours).toFixed(2);
+      const updatedTicket: LocalTicket = {
+        ...t,
+        spentTime: `PT${Math.floor(newSpent)}H${Math.round((newSpent % 1) * 60)}M`,
+        pendingSync: true
+      };
+      await db.putTicket(updatedTicket);
+      setTickets(prev => prev.map(item => item.id === targetTicketId ? updatedTicket : item));
     }
+
+    // Try posting directly to OpenProject API if online, or enqueue in sync queue
+    let syncedImmediately = false;
+    if (navigator.onLine) {
+      try {
+        await OpenProjectService.logTime(targetTicketId, hoursDuration, newEffort.comment, dateStr);
+        newEffort.pendingSync = false;
+        await db.putEffort(newEffort);
+        setAllEfforts(prev => prev.map(e => e.id === newEffort.id ? { ...e, pendingSync: false } : e));
+        syncedImmediately = true;
+      } catch (err) {
+        console.warn('[Effort] Immediate sync failed, enqueuing for sync:', err);
+      }
+    }
+
+    if (!syncedImmediately) {
+      await db.enqueueSyncItem({
+        id: `time_${targetTicketId}_${Date.now()}`,
+        type: 'LOG_TIME',
+        payload: {
+          ticketId: targetTicketId,
+          hours: hoursDuration,
+          comment: newEffort.comment,
+          date: dateStr
+        },
+        createdAt: new Date().toISOString(),
+        retryCount: 0
+      });
+    }
+
+    setIsLoggingEffort(false);
+    setIsAddEffortModalOpen(false);
+    setEffortTicketSearch('');
+    setEffortSelectedTicket(null);
+    setEffortModalComment('');
+    showEphemeralNotice(`Logged ${hours}h for #${targetTicketId} (${syncedImmediately ? 'Synced with OP' : 'Saved locally'})`);
   };
 
   // --- Save Connection Settings ---
@@ -533,10 +569,15 @@ export default function App() {
     return selectedTicketProjectAssignees.filter(u => u.name.toLowerCase().includes(q));
   }, [selectedTicketProjectAssignees, assigneePickerSearch]);
 
-  // Assignees strictly associated with the currently filtered project in drawer
+  // Assignees strictly associated with the currently filtered projects in drawer
   const filterDrawerAssignees = useMemo(() => {
-    if (filterProject) {
-      return getAssigneesForProject(filterProject);
+    if (filterProjects.length > 0) {
+      const set = new Map<string, string>();
+      for (const p of filterProjects) {
+        const list = getAssigneesForProject(p);
+        list.forEach(u => set.set(u.id, u.name));
+      }
+      return Array.from(set.entries()).map(([id, name]) => ({ id, name }));
     }
     const map = new Map<string, string>();
     tickets.forEach(t => {
@@ -545,7 +586,7 @@ export default function App() {
       }
     });
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [filterProject, getAssigneesForProject, tickets]);
+  }, [filterProjects, getAssigneesForProject, tickets]);
 
   // Search filter for Project Picker in Filter Drawer
   const filteredProjectPickerList = useMemo(() => {
@@ -568,14 +609,41 @@ export default function App() {
     return savedViews.filter(v => v.name.toLowerCase().includes(q));
   }, [savedViews, viewSearchQuery]);
 
+  // Search filter for Add Effort Ticket Picker
+  const effortTicketSearchResults = useMemo(() => {
+    const q = effortTicketSearch.toLowerCase().trim();
+    if (!q) return tickets.slice(0, 8);
+    return tickets.filter(t => 
+      String(t.id).includes(q) ||
+      t.subject.toLowerCase().includes(q) ||
+      t.project.toLowerCase().includes(q)
+    ).slice(0, 10);
+  }, [tickets, effortTicketSearch]);
+
   // --- Saved Views Activation & Application ---
   const applySavedView = (view: SavedView) => {
     setActiveViewId(view.id);
     const f = view.filters;
 
     setFilterStatusCategory(f.statusCategory || 'all');
-    setFilterStatus(f.statusId || '');
-    setFilterProject(f.project || f.projectId || '');
+    if (f.statusIds && f.statusIds.length > 0) {
+      setFilterStatuses(f.statusIds);
+    } else if (f.statusId) {
+      setFilterStatuses([f.statusId]);
+    } else {
+      setFilterStatuses([]);
+    }
+
+    if (f.projects && f.projects.length > 0) {
+      setFilterProjects(f.projects);
+    } else if (f.project) {
+      setFilterProjects([f.project]);
+    } else if (f.projectId) {
+      setFilterProjects([f.projectId]);
+    } else {
+      setFilterProjects([]);
+    }
+
     setFilterType(f.type || '');
     setFilterAssignee(f.assignee || '');
     setFilterPriority(f.priority || '');
@@ -603,9 +671,8 @@ export default function App() {
       createdAt: new Date().toISOString(),
       filters: {
         statusCategory: filterStatusCategory,
-        statusId: filterStatus || undefined,
-        project: filterProject || undefined,
-        projectId: resolveProjectId(filterProject),
+        statusIds: filterStatuses.length > 0 ? filterStatuses : undefined,
+        projects: filterProjects.length > 0 ? filterProjects : undefined,
         type: filterType || undefined,
         assignee: filterAssignee || undefined,
         priority: filterPriority || undefined,
@@ -629,6 +696,27 @@ export default function App() {
       applySavedView(savedViews[0] || DEFAULT_SAVED_VIEWS[0]);
     }
     showEphemeralNotice('View deleted');
+  };
+
+  // --- Toggle Multi-Select Filters Helpers ---
+  const toggleProjectFilter = (projName: string) => {
+    setFilterProjects(prev => {
+      if (prev.includes(projName)) {
+        return prev.filter(p => p !== projName);
+      } else {
+        return [...prev, projName];
+      }
+    });
+  };
+
+  const toggleStatusFilter = (statusId: string) => {
+    setFilterStatuses(prev => {
+      if (prev.includes(statusId)) {
+        return prev.filter(s => s !== statusId);
+      } else {
+        return [...prev, statusId];
+      }
+    });
   };
 
   // --- Filtered & Sorted Tickets ---
@@ -658,18 +746,20 @@ export default function App() {
         if (!isClosed) return false;
       }
 
-      // 4. Specific Status
-      if (filterStatus && t.statusId !== filterStatus && t.status !== filterStatus) {
-        return false;
+      // 4. Multiple Specific Statuses
+      if (filterStatuses.length > 0) {
+        const matchStatus = filterStatuses.includes(t.statusId) || filterStatuses.some(s => s.toLowerCase() === t.status.toLowerCase());
+        if (!matchStatus) return false;
       }
 
-      // 5. Project
-      if (filterProject) {
-        const projId = resolveProjectId(filterProject);
-        const match = (projId && t.projectId === projId) || 
-                      t.project.toLowerCase() === filterProject.toLowerCase() ||
-                      (t.projectId && t.projectId === filterProject);
-        if (!match) return false;
+      // 5. Multiple Projects
+      if (filterProjects.length > 0) {
+        const matchProject = filterProjects.some(p => 
+          t.project.toLowerCase() === p.toLowerCase() ||
+          (t.projectId && t.projectId === p) ||
+          (resolveProjectId(p) && t.projectId === resolveProjectId(p))
+        );
+        if (!matchProject) return false;
       }
 
       // 6. Type
@@ -677,12 +767,13 @@ export default function App() {
         return false;
       }
 
-      // 7. Assignee
+      // 7. Assignee (FIXED: strictly matches current user Nibas Nazeem or ID, never generic substring 'me' which matched Mehaboob Ali)
       if (filterAssignee) {
         if (filterAssignee === 'me') {
-          const isMe = (currentUser.id && t.assigneeId === currentUser.id) || 
-                       t.assignee.toLowerCase().includes('nibas') || 
-                       t.assignee.toLowerCase().includes('me');
+          const isMe = (currentUser.id && String(t.assigneeId) === String(currentUser.id)) || 
+                       t.assignee.toLowerCase() === 'me' || 
+                       t.assignee.toLowerCase() === currentUser.name.toLowerCase() ||
+                       t.assignee.toLowerCase().includes('nibas');
           if (!isMe) return false;
         } else if (filterAssignee === 'unassigned') {
           if (t.assignee && t.assignee.toLowerCase() !== 'unassigned') return false;
@@ -728,8 +819,8 @@ export default function App() {
     filterStarredOnly, 
     filterStatusCategory, 
     closedStatusIds, 
-    filterStatus, 
-    filterProject, 
+    filterStatuses, 
+    filterProjects, 
     resolveProjectId, 
     filterType, 
     filterAssignee, 
@@ -740,15 +831,15 @@ export default function App() {
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
-    if (filterProject) count++;
+    if (filterProjects.length > 0) count++;
     if (filterStatusCategory !== 'all') count++;
-    if (filterStatus) count++;
+    if (filterStatuses.length > 0) count++;
     if (filterType) count++;
     if (filterAssignee) count++;
     if (filterPriority) count++;
     if (filterStarredOnly) count++;
     return count;
-  }, [filterProject, filterStatusCategory, filterStatus, filterType, filterAssignee, filterPriority, filterStarredOnly]);
+  }, [filterProjects, filterStatusCategory, filterStatuses, filterType, filterAssignee, filterPriority, filterStarredOnly]);
 
   const activeViewObj = useMemo(() => {
     return savedViews.find(v => v.id === activeViewId) || null;
@@ -830,8 +921,8 @@ export default function App() {
             )}
           </div>
 
-          {/* Effort Summary Gauge & Settings Icon */}
-          <div className="flex items-center gap-2.5">
+          {/* Effort Summary Gauge, Quick Add Effort & Settings Icon */}
+          <div className="flex items-center gap-2">
             <div className="text-right">
               <div className="text-xs font-mono font-semibold text-emerald-400 leading-none">
                 {todayTotalHours.toFixed(1)}h <span className="text-[#64748b] font-normal text-[11px]">/ 8h</span>
@@ -843,6 +934,21 @@ export default function App() {
                 />
               </div>
             </div>
+
+            {/* Quick Add Effort Shortcut Button */}
+            <button
+              onClick={() => {
+                setIsAddEffortModalOpen(true);
+                setEffortTicketSearch('');
+                setEffortSelectedTicket(null);
+                setEffortModalComment('');
+                setEffortModalHours('1.0');
+              }}
+              className="p-1.5 text-emerald-400 hover:text-white border border-emerald-500/30 bg-emerald-500/10 rounded-lg transition"
+              title="Log effort on any ticket"
+            >
+              <Clock className="w-4 h-4" />
+            </button>
 
             <button 
               onClick={() => setActiveTab('settings')}
@@ -1154,9 +1260,9 @@ export default function App() {
                 <div className="flex justify-center gap-2">
                   <button 
                     onClick={() => {
-                      setFilterProject('');
+                      setFilterProjects([]);
+                      setFilterStatuses([]);
                       setFilterStatusCategory('all');
-                      setFilterStatus('');
                       setFilterType('');
                       setFilterAssignee('');
                       setFilterPriority('');
@@ -1252,28 +1358,45 @@ export default function App() {
           </main>
         )}
 
-        {/* Tab 2: Daily & Weekly Efforts Dashboard with Effort Search */}
+        {/* Tab 2: Daily & Weekly Efforts Dashboard with Effort Search & Add Effort Popup */}
         {activeTab === 'efforts' && (
           <main className="flex-1 overflow-y-auto p-4 space-y-4">
             
-            {/* Search Input for Logged Efforts */}
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
-              <input 
-                type="text"
-                value={effortSearchQuery}
-                onChange={e => setEffortSearchQuery(e.target.value)}
-                placeholder="Search logged efforts (#ID, subject, comment, date)..."
-                className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
-              />
-              {effortSearchQuery && (
-                <button 
-                  onClick={() => setEffortSearchQuery('')} 
-                  className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
+            {/* Search Input for Logged Efforts & Log Effort Button */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                <input 
+                  type="text"
+                  value={effortSearchQuery}
+                  onChange={e => setEffortSearchQuery(e.target.value)}
+                  placeholder="Search logged efforts (#ID, comment, date)..."
+                  className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                />
+                {effortSearchQuery && (
+                  <button 
+                    onClick={() => setEffortSearchQuery('')} 
+                    className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Log Effort Button Trigger */}
+              <button
+                onClick={() => {
+                  setIsAddEffortModalOpen(true);
+                  setEffortTicketSearch('');
+                  setEffortSelectedTicket(null);
+                  setEffortModalComment('');
+                  setEffortModalHours('1.0');
+                }}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-2 rounded-xl font-medium shrink-0 flex items-center gap-1.5 transition shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Log Effort</span>
+              </button>
             </div>
 
             {/* When Effort Search Query is Active: Display Searched Results */}
@@ -1394,6 +1517,18 @@ export default function App() {
                   {effortsForSelectedDate.length === 0 ? (
                     <div className="p-6 bg-[#090d16] border border-[#1e293b] rounded-2xl text-center">
                       <p className="text-xs text-[#64748b]">No effort logged for this date.</p>
+                      <button
+                        onClick={() => {
+                          setIsAddEffortModalOpen(true);
+                          setEffortModalDate(selectedEffortDate);
+                          setEffortTicketSearch('');
+                          setEffortSelectedTicket(null);
+                        }}
+                        className="mt-3 text-xs bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-medium inline-flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Log Effort for {selectedEffortDate}</span>
+                      </button>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1476,7 +1611,7 @@ export default function App() {
           </main>
         )}
 
-        {/* OpenProject-Style Multi-Attribute Filter Slide Panel */}
+        {/* OpenProject-Style Multi-Attribute Filter Slide Panel (with Multiple Projects & Multiple Statuses) */}
         {isFilterDrawerOpen && (
           <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex justify-end animate-in fade-in duration-200">
             <div 
@@ -1497,15 +1632,42 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Drawer Body (OpenProject Filters) */}
+              {/* Drawer Body (OpenProject Multi-Select Filters) */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 
-                {/* 1. Project Filter with Searchable Modal Trigger */}
+                {/* 1. Projects Multi-Select Filter */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">Project</label>
-                    <span className="text-[10px] font-mono text-[#64748b]">{uniqueProjects.length} projects</span>
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">
+                      Projects {filterProjects.length > 0 && `(${filterProjects.length} selected)`}
+                    </label>
+                    {filterProjects.length > 0 && (
+                      <button 
+                        onClick={() => setFilterProjects([])} 
+                        className="text-[10px] text-blue-400 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    )}
                   </div>
+
+                  {/* Selected Project Tags */}
+                  {filterProjects.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {filterProjects.map(p => (
+                        <span 
+                          key={p} 
+                          className="bg-blue-600/20 text-blue-300 border border-blue-500/30 rounded-lg px-2 py-0.5 text-[10px] flex items-center gap-1 font-mono"
+                        >
+                          <span className="truncate max-w-[140px]">{p}</span>
+                          <button onClick={() => toggleProjectFilter(p)} className="hover:text-white">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => {
@@ -1516,10 +1678,14 @@ export default function App() {
                   >
                     <div className="flex items-center gap-2 truncate">
                       <FolderKanban className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                      <span className="truncate">{filterProject || 'All Projects'}</span>
+                      <span className="truncate">
+                        {filterProjects.length === 0 
+                          ? 'All Projects' 
+                          : `${filterProjects.length} Project(s) selected`}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1 text-[#64748b] group-hover:text-blue-400 shrink-0">
-                      <span className="text-[10px] font-mono uppercase">Search</span>
+                      <span className="text-[10px] font-mono uppercase">Select</span>
                       <Search className="w-3 h-3" />
                     </div>
                   </button>
@@ -1565,19 +1731,52 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 3. Specific Real OpenProject Status */}
+                {/* 3. Specific Multi-Status Filter Chips */}
                 <div>
-                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1.5">Specific Status</label>
-                  <select
-                    value={filterStatus}
-                    onChange={e => setFilterStatus(e.target.value)}
-                    className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="">Any Specific Status</option>
-                    {displayStatuses.map(s => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">
+                      Specific Statuses {filterStatuses.length > 0 && `(${filterStatuses.length})`}
+                    </label>
+                    <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => setFilterStatuses(displayStatuses.filter(s => !closedStatusIds.has(s.id)).map(s => s.id))}
+                        className="text-[10px] text-blue-400 hover:underline"
+                      >
+                        All Open
+                      </button>
+                      {filterStatuses.length > 0 && (
+                        <button 
+                          type="button"
+                          onClick={() => setFilterStatuses([])}
+                          className="text-[10px] text-[#64748b] hover:text-white"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto p-1.5 bg-[#090d16] border border-[#1e293b] rounded-xl">
+                    {displayStatuses.map(s => {
+                      const isSelected = filterStatuses.includes(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => toggleStatusFilter(s.id)}
+                          className={`text-[10px] px-2 py-1 rounded-lg transition font-medium flex items-center gap-1 ${
+                            isSelected 
+                              ? 'bg-blue-600 text-white font-semibold' 
+                              : 'bg-[#0f172a] text-[#94a3b8] border border-[#1e293b] hover:border-slate-600'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5" />}
+                          <span>{s.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* 4. Assignee Filter with Searchable Modal Trigger */}
@@ -1587,7 +1786,7 @@ export default function App() {
                       Assignee
                     </label>
                     <span className="text-[10px] font-mono text-slate-400">
-                      {filterProject ? `${filterDrawerAssignees.length} project member(s)` : 'All members'}
+                      {filterProjects.length > 0 ? `${filterDrawerAssignees.length} project member(s)` : 'All members'}
                     </span>
                   </div>
                   <button
@@ -1659,7 +1858,7 @@ export default function App() {
                   />
                 </div>
 
-                {/* Save Current Filters as View Trigger */}
+                {/* Save Current Multi-Filters as View Trigger */}
                 <button
                   type="button"
                   onClick={() => {
@@ -1669,7 +1868,7 @@ export default function App() {
                   className="w-full py-2.5 px-3 bg-[#1e293b] hover:bg-[#334155] border border-dashed border-[#475569] text-xs text-blue-400 rounded-xl font-medium flex items-center justify-center gap-1.5 transition"
                 >
                   <Bookmark className="w-3.5 h-3.5" />
-                  <span>Save Current Filters as View</span>
+                  <span>Save Multi-Filters as View</span>
                 </button>
 
               </div>
@@ -1678,9 +1877,9 @@ export default function App() {
               <div className="p-3 border-t border-[#1e293b] flex gap-2">
                 <button
                   onClick={() => {
-                    setFilterProject('');
+                    setFilterProjects([]);
+                    setFilterStatuses([]);
                     setFilterStatusCategory('open');
-                    setFilterStatus('');
                     setFilterType('');
                     setFilterAssignee('');
                     setFilterPriority('');
@@ -1701,7 +1900,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Searchable Project Picker Modal (Filter Drawer) */}
+        {/* Searchable Multi-Project Picker Modal (Filter Drawer) */}
         {isProjectPickerOpen && (
           <div 
             className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
@@ -1713,15 +1912,18 @@ export default function App() {
             >
               <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
                 <div>
-                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Select Project</h3>
-                  <span className="text-[11px] text-[#64748b]">{uniqueProjects.length} available project(s)</span>
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Select Projects</h3>
+                  <span className="text-[11px] text-[#64748b]">
+                    {filterProjects.length} of {uniqueProjects.length} selected
+                  </span>
                 </div>
                 <button onClick={() => setIsProjectPickerOpen(false)} className="p-1 text-[#64748b] hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-3 border-b border-[#1e293b] shrink-0 bg-[#090d16]/60">
+              {/* Search Field & Quick Actions */}
+              <div className="p-3 border-b border-[#1e293b] shrink-0 bg-[#090d16]/60 space-y-2">
                 <div className="relative">
                   <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
                   <input
@@ -1738,53 +1940,52 @@ export default function App() {
                     </button>
                   )}
                 </div>
+
+                <div className="flex justify-between items-center text-xs">
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setFilterProjects(uniqueProjects.map(p => p.name))}
+                      className="text-[11px] text-blue-400 hover:underline"
+                    >
+                      Select All
+                    </button>
+                    <button 
+                      onClick={() => setFilterProjects([])}
+                      className="text-[11px] text-[#64748b] hover:text-white"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <button 
+                    onClick={() => setIsProjectPickerOpen(false)}
+                    className="bg-blue-600 text-white text-[11px] px-2.5 py-1 rounded-lg font-medium"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
 
+              {/* Filtered Project List with Checkboxes */}
               <div className="flex-1 overflow-y-auto divide-y divide-[#1e293b]/50 p-1">
-                {/* All Projects Option */}
-                {(!projectPickerSearch || 'all projects'.includes(projectPickerSearch.toLowerCase())) && (
-                  <button
-                    onClick={() => {
-                      setFilterProject('');
-                      setIsProjectPickerOpen(false);
-                    }}
-                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
-                      !filterProject ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <FolderKanban className="w-4 h-4 text-blue-400" />
-                      <span>All Projects</span>
-                    </div>
-                    {!filterProject && <Check className="w-4 h-4 text-blue-400" />}
-                  </button>
-                )}
-
-                {/* Filtered Project List */}
                 {filteredProjectPickerList.map(p => {
-                  const isSelected = filterProject === p.name;
+                  const isSelected = filterProjects.includes(p.name);
                   return (
                     <button
                       key={p.id}
-                      onClick={() => {
-                        setFilterProject(p.name);
-                        if (filterAssignee && filterAssignee !== 'me' && filterAssignee !== 'unassigned') {
-                          const newAssignees = getAssigneesForProject(p.name);
-                          if (!newAssignees.some(u => u.id === filterAssignee)) {
-                            setFilterAssignee('');
-                          }
-                        }
-                        setIsProjectPickerOpen(false);
-                      }}
+                      onClick={() => toggleProjectFilter(p.name)}
                       className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
                         isSelected ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
                       }`}
                     >
                       <div className="flex items-center gap-2.5 truncate">
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition ${
+                          isSelected ? 'bg-blue-600 border-blue-500' : 'border-[#334155]'
+                        }`}>
+                          {isSelected && <Check className="w-3 h-3 text-white" />}
+                        </div>
                         <FolderKanban className="w-4 h-4 text-slate-400 shrink-0" />
                         <span className="truncate">{p.name}</span>
                       </div>
-                      {isSelected && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
                     </button>
                   );
                 })}
@@ -1813,7 +2014,7 @@ export default function App() {
                 <div>
                   <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Filter by Assignee</h3>
                   <span className="text-[11px] text-[#64748b]">
-                    {filterProject ? `Members in ${filterProject}` : `All members`} ({filterDrawerAssignees.length})
+                    {filterProjects.length > 0 ? `Members in ${filterProjects.length} project(s)` : `All members`} ({filterDrawerAssignees.length})
                   </span>
                 </div>
                 <button onClick={() => setIsDrawerAssigneePickerOpen(false)} className="p-1 text-[#64748b] hover:text-white">
@@ -1935,6 +2136,236 @@ export default function App() {
           </div>
         )}
 
+        {/* Direct Add Effort Popup (Search Tickets by Number & Log Effort) */}
+        {isAddEffortModalOpen && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            onClick={() => setIsAddEffortModalOpen(false)}
+          >
+            <div 
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[90vh] sm:max-h-[640px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Log Time Effort</h3>
+                </div>
+                <button onClick={() => setIsAddEffortModalOpen(false)} className="p-1 text-[#64748b] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3.5 overflow-y-auto">
+                {/* 1. Ticket Selector / Searcher */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1">
+                    Select Work Package
+                  </label>
+
+                  {effortSelectedTicket ? (
+                    <div className="p-3 bg-[#090d16] border border-blue-500/40 rounded-xl flex items-center justify-between">
+                      <div className="min-w-0 flex-1 pr-2">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="font-mono text-xs font-bold text-blue-400">
+                            #{effortSelectedTicket.id}
+                          </span>
+                          <span className="text-[10px] font-mono text-[#64748b] truncate">
+                            {effortSelectedTicket.project}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#f1f5f9] truncate font-medium">
+                          {effortSelectedTicket.subject}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setEffortSelectedTicket(null)}
+                        className="text-xs text-blue-400 hover:underline shrink-0 font-medium"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                        <input
+                          type="text"
+                          autoFocus
+                          value={effortTicketSearch}
+                          onChange={e => setEffortTicketSearch(e.target.value)}
+                          placeholder="Search ticket #ID or title..."
+                          className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                        />
+                        {effortTicketSearch && (
+                          <button 
+                            onClick={() => setEffortTicketSearch('')}
+                            className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Matching Tickets List */}
+                      <div className="max-h-36 overflow-y-auto divide-y divide-[#1e293b] border border-[#1e293b] rounded-xl bg-[#090d16]">
+                        {effortTicketSearchResults.map(t => (
+                          <div
+                            key={t.id}
+                            onClick={() => setEffortSelectedTicket(t)}
+                            className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between"
+                          >
+                            <div className="truncate pr-2">
+                              <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
+                              <span className="text-slate-300 font-medium">{t.subject}</span>
+                            </div>
+                            <span className="text-[10px] font-mono text-[#64748b] shrink-0">{t.project}</span>
+                          </div>
+                        ))}
+
+                        {effortTicketSearchResults.length === 0 && effortTicketSearch && (
+                          <div className="p-3 text-center text-xs text-[#64748b]">
+                            <span>No cached ticket found.</span>
+                            {parseInt(effortTicketSearch.replace(/^#/, ''), 10) > 0 && (
+                              <button
+                                onClick={() => {
+                                  const id = parseInt(effortTicketSearch.replace(/^#/, ''), 10);
+                                  setEffortSelectedTicket({
+                                    id,
+                                    subject: `Ticket #${id}`,
+                                    project: 'OpenProject',
+                                    status: 'Open',
+                                    statusId: '1',
+                                    priority: 'Normal',
+                                    assignee: 'Unassigned',
+                                    lockVersion: 1,
+                                    updatedAt: new Date().toISOString()
+                                  });
+                                }}
+                                className="block mt-1 text-blue-400 hover:underline mx-auto font-mono text-[11px]"
+                              >
+                                Target Ticket #{effortTicketSearch.replace(/^#/, '')} Directly
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Hours Presets & Custom Input */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">
+                      Hours Spent
+                    </label>
+                    <span className="text-xs font-mono font-bold text-emerald-400">
+                      {parseFloat(effortModalHours) > 0 ? `${parseFloat(effortModalHours).toFixed(1)}h` : '0h'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1.5 mb-2">
+                    {['0.5', '1.0', '1.5', '2.0', '3.0', '4.0', '6.0', '8.0'].map(hrs => (
+                      <button
+                        key={hrs}
+                        type="button"
+                        onClick={() => setEffortModalHours(hrs)}
+                        className={`py-1.5 rounded-lg text-xs font-mono font-semibold transition ${
+                          effortModalHours === hrs
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-[#090d16] text-[#94a3b8] border border-[#1e293b] hover:border-slate-600'
+                        }`}
+                      >
+                        +{hrs}h
+                      </button>
+                    ))}
+                  </div>
+
+                  <input
+                    type="number"
+                    step="0.25"
+                    value={effortModalHours}
+                    onChange={e => setEffortModalHours(e.target.value)}
+                    placeholder="Custom hours (e.g. 1.25)"
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* 3. Spent On Date */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">
+                      Date Spent
+                    </label>
+                    <div className="flex gap-1.5 text-[10px]">
+                      <button 
+                        type="button" 
+                        onClick={() => setEffortModalDate(todayStr)}
+                        className={`px-2 py-0.5 rounded font-mono ${effortModalDate === todayStr ? 'bg-blue-600 text-white' : 'text-blue-400 hover:underline'}`}
+                      >
+                        Today
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const y = new Date();
+                          y.setDate(y.getDate() - 1);
+                          setEffortModalDate(y.toISOString().split('T')[0]);
+                        }}
+                        className="text-[#64748b] hover:text-white font-mono"
+                      >
+                        Yesterday
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="date"
+                    value={effortModalDate}
+                    onChange={e => setEffortModalDate(e.target.value)}
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs font-mono text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* 4. Comment / Work Description */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1">
+                    Comment / Description
+                  </label>
+                  <input
+                    type="text"
+                    value={effortModalComment}
+                    onChange={e => setEffortModalComment(e.target.value)}
+                    placeholder="What did you work on? (e.g. Bugfix, code review, meeting)"
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl px-3 py-2 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Submit Action */}
+                <button
+                  type="button"
+                  disabled={!effortSelectedTicket || parseFloat(effortModalHours) <= 0 || isLoggingEffort}
+                  onClick={() => {
+                    if (effortSelectedTicket) {
+                      handleLogEffortDirect(
+                        effortSelectedTicket.id,
+                        effortSelectedTicket.subject,
+                        parseFloat(effortModalHours),
+                        effortModalDate,
+                        effortModalComment
+                      );
+                    }
+                  }}
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold font-mono flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-900/30"
+                >
+                  <Clock className="w-4 h-4" />
+                  <span>{isLoggingEffort ? 'Logging Effort...' : `Confirm & Log ${parseFloat(effortModalHours) || 0}h`}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Save View Modal (OpenProject View Feature) */}
         {isSaveViewModalOpen && (
           <div className="absolute inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
@@ -1955,7 +2386,7 @@ export default function App() {
                   type="text"
                   value={newViewName}
                   onChange={e => setNewViewName(e.target.value)}
-                  placeholder="e.g. My Sprint Bugs, James Team Tasks..."
+                  placeholder="e.g. D365 & James Team Bugs..."
                   className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500"
                   autoFocus
                 />
@@ -2152,7 +2583,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* Log Effort Section */}
+              {/* Log Effort Section on Ticket */}
               <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-3.5 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono uppercase text-[#64748b] tracking-wider">
@@ -2170,7 +2601,7 @@ export default function App() {
                   {[0.5, 1.0, 2.0, 4.0].map(hrs => (
                     <button
                       key={hrs}
-                      onClick={() => handleLogEffort(hrs, 'Work on ticket')}
+                      onClick={() => handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, hrs, todayStr, 'Work on ticket')}
                       className="py-2 rounded-xl bg-[#0f172a] hover:bg-[#1e293b] border border-[#1e293b] text-xs font-mono font-semibold text-emerald-400 transition"
                     >
                       +{hrs}h
@@ -2200,7 +2631,11 @@ export default function App() {
                   <button
                     onClick={() => {
                       const h = parseFloat(customEffortHours);
-                      if (h > 0) handleLogEffort(h, customEffortComment);
+                      if (h > 0) {
+                        handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, h, todayStr, customEffortComment);
+                        setCustomEffortHours('');
+                        setCustomEffortComment('');
+                      }
                     }}
                     disabled={!customEffortHours || parseFloat(customEffortHours) <= 0}
                     className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-medium py-2 rounded-xl text-xs transition font-mono"

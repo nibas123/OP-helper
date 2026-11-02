@@ -59,9 +59,12 @@ export interface ProjectAssigneeRecord {
 export interface ViewFilters {
   statusCategory?: 'all' | 'open' | 'closed';
   statusId?: string;
+  statusIds?: string[]; // Multiple status selection
   project?: string;
   projectId?: string;
+  projects?: string[]; // Multiple project selection
   type?: string;
+  types?: string[];
   assignee?: string; // 'all' | 'me' | 'unassigned' | specific userId/name
   priority?: string;
   starredOnly?: boolean;

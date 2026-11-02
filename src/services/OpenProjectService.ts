@@ -207,17 +207,30 @@ export const OpenProjectService = {
     return response.data;
   },
 
+  getMyTimeEntries: async (pageSize = 100) => {
+    const client = await getApiClient();
+    const filter = JSON.stringify([{ "user": { "operator": "=", "values": ["me"] } }]);
+    const response = await client.get(`/time_entries?filters=${encodeURIComponent(filter)}&pageSize=${pageSize}&sortBy=[["spent_on","desc"]]`);
+    return response.data;
+  },
+
   getTimeEntriesForDate: async (dateStr: string) => {
     const client = await getApiClient();
-    const filter = JSON.stringify([{ "spentOn": { "operator": "=", "values": [dateStr] } }]);
+    const filter = JSON.stringify([
+      { "user": { "operator": "=", "values": ["me"] } },
+      { "spentOn": { "operator": "=d", "values": [dateStr] } }
+    ]);
     const response = await client.get(`/time_entries?filters=${encodeURIComponent(filter)}&pageSize=100`);
     return response.data;
   },
 
   getTimeEntriesForDateRange: async (startDate: string, endDate: string) => {
     const client = await getApiClient();
-    const filter = JSON.stringify([{ "spentOn": { "operator": "><", "values": [startDate, endDate] } }]);
-    const response = await client.get(`/time_entries?filters=${encodeURIComponent(filter)}&pageSize=200`);
+    const filter = JSON.stringify([
+      { "user": { "operator": "=", "values": ["me"] } },
+      { "spentOn": { "operator": "<>d", "values": [startDate, endDate] } }
+    ]);
+    const response = await client.get(`/time_entries?filters=${encodeURIComponent(filter)}&pageSize=200&sortBy=[["spent_on","desc"]]`);
     return response.data;
   },
 

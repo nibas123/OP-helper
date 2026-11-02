@@ -212,27 +212,26 @@ export const syncService = {
         }
       }
 
-      // 4. Fetch Recent (Past 7 Days) Logged Efforts
-      const today = new Date();
-      const past7Days = new Date();
-      past7Days.setDate(past7Days.getDate() - 7);
-      const startStr = past7Days.toISOString().split('T')[0];
-      const endStr = today.toISOString().split('T')[0];
-
+      // 4. Fetch User's Recent Logged Efforts from OpenProject
       try {
         let timeData;
         try {
-          timeData = await OpenProjectService.getTimeEntriesForDateRange(startStr, endStr);
+          timeData = await OpenProjectService.getMyTimeEntries(100);
         } catch {
-          timeData = await OpenProjectService.getTimeEntriesForDate(endStr);
+          const past7Days = new Date();
+          past7Days.setDate(past7Days.getDate() - 14);
+          const startStr = past7Days.toISOString().split('T')[0];
+          const endStr = new Date().toISOString().split('T')[0];
+          timeData = await OpenProjectService.getTimeEntriesForDateRange(startStr, endStr);
         }
+
         const entries = timeData?._embedded?.elements || [];
         const efforts: LocalEffort[] = entries.map((entry: any) => {
           const wpId = entry._links?.workPackage?.href ? parseInt(entry._links.workPackage.href.split('/').pop()!, 10) : 0;
           return {
             id: String(entry.id),
             workPackageId: wpId,
-            ticketSubject: entry._links?.workPackage?.title,
+            ticketSubject: entry._links?.workPackage?.title || '',
             hours: parseDurationToHours(entry.hours),
             comment: entry.comment?.raw || '',
             spentOn: entry.spentOn,
@@ -240,7 +239,10 @@ export const syncService = {
             pendingSync: false
           };
         });
-        await db.putEfforts(efforts);
+
+        if (efforts.length > 0) {
+          await db.putEfforts(efforts);
+        }
       } catch (e) {
         console.warn('[Sync] Time entries fetch failed (non-critical):', e);
       }
