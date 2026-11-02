@@ -2,22 +2,23 @@
  * ==============================================================================
  * OP HELPER - GOOGLE APPS SCRIPT DATABASE & EXCEL SYNC
  * ==============================================================================
- * This script turns your Google Sheet into a REST database for OP Helper.
- * It stores:
- *  1. Efforts_Log      - Full timesheet log with dates, hours, and work comments.
- *  2. Tickets_Snapshot - Active ticket inventory with statuses, assignees & spent hours.
- *  3. Config_Views     - Your custom saved views and filter definitions.
- *  4. Config_Static    - Projects, statuses, types, and current user info.
+ * This script turns your Google Sheet into a live REST database for OP Helper.
+ * It manages:
+ *  1. My_Assigned_Tickets - Permanent inventory of all tickets assigned to your name.
+ *                           Keeps updating statuses and never deletes past tickets.
+ *  2. Efforts_Log         - Full timesheet log with dates, hours, and work comments.
+ *  3. Tickets_Snapshot    - All active tickets snapshot.
+ *  4. Config_Views        - Custom saved views and filter definitions.
+ *  5. Config_Static       - Projects, statuses, types, and user master data.
  *
- * HOW TO DEPLOY:
+ * HOW TO DEPLOY / UPDATE:
  *  1. In Google Sheets, go to: Extensions -> Apps Script.
  *  2. Replace all existing text with this code.
- *  3. Click "Deploy" (top right) -> "New deployment".
- *  4. Choose type: "Web app".
- *  5. Set "Execute as": "Me".
- *  6. Set "Who has access": "Anyone".
- *  7. Click "Deploy", authorize permissions, and copy the Web App URL.
- *  8. Paste the Web App URL into OP Helper's Settings modal.
+ *  3. Click "Deploy" -> "Manage deployments".
+ *  4. Click the Pencil (Edit) icon.
+ *  5. Set Version to: "New version".
+ *  6. Ensure "Who has access" is set to: "Anyone".
+ *  7. Click "Deploy" and copy the Web App URL (ends with /exec).
  * ==============================================================================
  */
 
@@ -44,6 +45,8 @@ function doPost(e) {
       saveAllDataToSheet(ss, payload);
     } else if (action === 'LOG_EFFORT') {
       appendEffortToSheet(ss, payload.effort, payload.currentUser);
+    } else if (action === 'SYNC_TICKET') {
+      syncSingleTicketToAssignedSheet(ss, payload.ticket, payload.currentUser, payload.opUrl);
     } else if (action === 'SAVE_VIEW') {
       saveViewToSheet(ss, payload.view);
     } else if (action === 'GET_ALL') {
@@ -69,42 +72,35 @@ function doPost(e) {
 // SAVE ALL DATA (FULL BACKUP / DUAL-SYNC)
 // -----------------------------------------------------------------------------
 function saveAllDataToSheet(ss, payload) {
-  // 1. Static Configuration & Master Tables
+  const nowStr = new Date().toLocaleString();
+
+  // 1. My Assigned Tickets (Intelligent Upsert - Keeps all tickets assigned to your name)
+  syncAssignedTickets(ss, payload.tickets, payload.currentUser, payload.opUrl);
+
+  // 2. Static Configuration & Master Tables
   const configSheet = getOrCreateSheet(ss, 'Config_Static', ['Type', 'ID', 'Name', 'Extra', 'Updated At']);
   configSheet.clearContents();
   configSheet.appendRow(['Type', 'ID', 'Name', 'Extra', 'Updated At']);
   formatHeaderRow(configSheet, 5);
 
   const configRows = [];
-  const nowStr = new Date().toLocaleString();
-
-  // User
   if (payload.currentUser) {
     configRows.push(['CurrentUser', payload.currentUser.id, payload.currentUser.name, '', nowStr]);
   }
-  // Projects
   if (payload.projects && payload.projects.length > 0) {
-    payload.projects.forEach(p => {
-      configRows.push(['Project', p.id, p.name, p.identifier || '', nowStr]);
-    });
+    payload.projects.forEach(p => configRows.push(['Project', p.id, p.name, p.identifier || '', nowStr]));
   }
-  // Statuses
   if (payload.statuses && payload.statuses.length > 0) {
-    payload.statuses.forEach(s => {
-      configRows.push(['Status', s.id, s.name, s.isClosed ? 'Closed' : 'Open', nowStr]);
-    });
+    payload.statuses.forEach(s => configRows.push(['Status', s.id, s.name, s.isClosed ? 'Closed' : 'Open', nowStr]));
   }
-  // Types
   if (payload.types && payload.types.length > 0) {
-    payload.types.forEach(t => {
-      configRows.push(['Type', t.id, t.name, '', nowStr]);
-    });
+    payload.types.forEach(t => configRows.push(['Type', t.id, t.name, '', nowStr]));
   }
   if (configRows.length > 0) {
     configSheet.getRange(2, 1, configRows.length, 5).setValues(configRows);
   }
 
-  // 2. Saved Views
+  // 3. Saved Views
   const viewsSheet = getOrCreateSheet(ss, 'Config_Views', ['View ID', 'Name', 'Is Favorite', 'Filters JSON', 'Updated At']);
   viewsSheet.clearContents();
   viewsSheet.appendRow(['View ID', 'Name', 'Is Favorite', 'Filters JSON', 'Updated At']);
@@ -121,7 +117,7 @@ function saveAllDataToSheet(ss, payload) {
     viewsSheet.getRange(2, 1, viewRows.length, 5).setValues(viewRows);
   }
 
-  // 3. Efforts Log
+  // 4. Efforts Log
   const effortsSheet = getOrCreateSheet(ss, 'Efforts_Log', [
     'Log ID', 'Date', 'Ticket #', 'Subject', 'Hours', 'User', 'Comment', 'Synced At'
   ]);
@@ -143,13 +139,13 @@ function saveAllDataToSheet(ss, payload) {
     effortsSheet.getRange(2, 1, effortRows.length, 8).setValues(effortRows);
   }
 
-  // 4. Tickets Snapshot
+  // 5. All Tickets Snapshot
   const ticketsSheet = getOrCreateSheet(ss, 'Tickets_Snapshot', [
-    'Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent (h)', 'Estimated (h)', 'Updated At'
+    'Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent', 'Estimated', 'Updated At'
   ]);
   if (payload.tickets && payload.tickets.length > 0) {
     ticketsSheet.clearContents();
-    ticketsSheet.appendRow(['Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent (h)', 'Estimated (h)', 'Updated At']);
+    ticketsSheet.appendRow(['Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent', 'Estimated', 'Updated At']);
     formatHeaderRow(ticketsSheet, 8);
 
     const ticketRows = payload.tickets.map(t => [
@@ -164,6 +160,79 @@ function saveAllDataToSheet(ss, payload) {
     ]);
     ticketsSheet.getRange(2, 1, ticketRows.length, 8).setValues(ticketRows);
   }
+}
+
+// -----------------------------------------------------------------------------
+// SYNC ASSIGNED TICKETS (MY_ASSIGNED_TICKETS TAB)
+// -----------------------------------------------------------------------------
+function syncAssignedTickets(ss, tickets, currentUser, opUrl) {
+  if (!tickets || tickets.length === 0) return;
+
+  const baseUrl = (opUrl || 'https://openproject.fingent.net').replace(/\/+$/, '');
+  const myName = (currentUser && currentUser.name) ? String(currentUser.name).toLowerCase().trim() : 'nibas';
+  const myId = (currentUser && currentUser.id) ? String(currentUser.id).trim() : '';
+
+  // Filter only tickets assigned to this user
+  const assignedTickets = tickets.filter(t => {
+    const assignee = String(t.assignee || '').toLowerCase().trim();
+    const assigneeId = String(t.assigneeId || '').trim();
+    return (myId && assigneeId === myId) ||
+           (myName && assignee.includes(myName)) ||
+           assignee.includes('nibas') ||
+           assignee === 'me';
+  });
+
+  if (assignedTickets.length === 0) return;
+
+  const sheet = getOrCreateSheet(ss, 'My_Assigned_Tickets', [
+    'Ticket #', 'Project', 'Ticket Name', 'Status', 'Priority', 'Spent', 'Estimated', 'Direct Link', 'Assigned To', 'Last Updated'
+  ]);
+  formatHeaderRow(sheet, 10);
+
+  // Read existing ticket IDs in Column A to perform intelligent upsert
+  const lastRow = sheet.getLastRow();
+  const existingMap = new Map(); // Ticket ID -> Row Number
+  if (lastRow > 1) {
+    const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    ids.forEach((row, idx) => {
+      const idVal = String(row[0]).trim();
+      if (idVal) existingMap.set(idVal, idx + 2);
+    });
+  }
+
+  const nowStr = new Date().toLocaleString();
+
+  assignedTickets.forEach(t => {
+    const ticketId = String(t.id);
+    const linkFormula = `=HYPERLINK("${baseUrl}/work_packages/${ticketId}", "Open #${ticketId}")`;
+    const rowValues = [
+      t.id,
+      t.project || '',
+      t.subject || '',
+      t.status || '',
+      t.priority || 'Normal',
+      t.spentTime || '',
+      t.estimatedTime || '',
+      linkFormula,
+      t.assignee || (currentUser ? currentUser.name : 'Nibas Nazeem'),
+      nowStr
+    ];
+
+    if (existingMap.has(ticketId)) {
+      // Update existing row in place
+      const targetRow = existingMap.get(ticketId);
+      sheet.getRange(targetRow, 1, 1, rowValues.length).setValues([rowValues]);
+    } else {
+      // Append new assigned ticket
+      sheet.appendRow(rowValues);
+      existingMap.set(ticketId, sheet.getLastRow());
+    }
+  });
+}
+
+function syncSingleTicketToAssignedSheet(ss, ticket, currentUser, opUrl) {
+  if (!ticket) return;
+  syncAssignedTickets(ss, [ticket], currentUser, opUrl);
 }
 
 // -----------------------------------------------------------------------------
@@ -279,8 +348,8 @@ function restoreAllDataFromSheet(ss) {
     });
   }
 
-  // 4. Tickets
-  const ticketsSheet = ss.getSheetByName('Tickets_Snapshot');
+  // 4. Tickets (from Tickets_Snapshot or My_Assigned_Tickets)
+  const ticketsSheet = ss.getSheetByName('Tickets_Snapshot') || ss.getSheetByName('My_Assigned_Tickets');
   if (ticketsSheet && ticketsSheet.getLastRow() > 1) {
     const data = ticketsSheet.getRange(2, 1, ticketsSheet.getLastRow() - 1, 8).getValues();
     data.forEach(row => {

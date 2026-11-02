@@ -1,4 +1,5 @@
 import { db, type LocalTicket, type LocalEffort, type LookupItem, type SavedView } from './db';
+import { OpenProjectService } from './OpenProjectService';
 
 const SHEET_STORAGE_KEY = 'op_sheet_url';
 const SHEET_LAST_SYNC_KEY = 'op_sheet_last_sync';
@@ -170,8 +171,10 @@ export const sheetSyncService = {
     }
 
     try {
+      const creds = await OpenProjectService.getCredentials();
       const payload = {
         action: 'SYNC_ALL',
+        opUrl: creds.url,
         timestamp: new Date().toISOString(),
         currentUser: data.currentUser,
         projects: data.projects,
@@ -245,6 +248,27 @@ export const sheetSyncService = {
     } catch (err: any) {
       console.warn('[SheetSync] restoreFromSheet failed:', err);
       return { success: false, message: err.message || 'Failed to restore from Google Sheet' };
+    }
+  },
+
+  /**
+   * Asynchronously syncs a single ticket to Google Sheet (for My_Assigned_Tickets).
+   */
+  async syncTicketAsync(ticket: LocalTicket, currentUser: { id: string; name: string }): Promise<void> {
+    const sheetUrl = this.getSheetUrl();
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) return;
+
+    try {
+      const creds = await OpenProjectService.getCredentials();
+      await sendToAppsScript(validation.cleanUrl, 'POST', {
+        action: 'SYNC_TICKET',
+        opUrl: creds.url,
+        ticket,
+        currentUser
+      });
+    } catch (e) {
+      console.warn('[SheetSync] Background sync ticket to sheet failed:', e);
     }
   },
 

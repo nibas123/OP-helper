@@ -645,6 +645,7 @@ export default function App() {
 
     await db.putTicket(updated);
     setTickets(prev => prev.map(t => t.id === ticket.id ? updated : t));
+    sheetSyncService.syncTicketAsync(updated, currentUser);
     showEphemeralNotice(`Status updated to ${statusName}`);
 
     await db.enqueueSyncItem({
@@ -675,6 +676,7 @@ export default function App() {
 
     await db.putTicket(updated);
     setTickets(prev => prev.map(t => t.id === ticket.id ? updated : t));
+    sheetSyncService.syncTicketAsync(updated, currentUser);
     showEphemeralNotice(`Reassigned to ${assigneeName}`);
 
     await db.enqueueSyncItem({
