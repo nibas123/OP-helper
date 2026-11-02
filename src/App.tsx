@@ -203,7 +203,9 @@ export default function App() {
   // Selected Ticket & Active View Tab
   const [selectedTicketId, setSelectedTicketId] = useState<number | null>(null);
   const [zoomedImageUrl, setZoomedImageUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'settings'>('tickets');
+  const [activeTab, setActiveTab] = useState<'tickets' | 'efforts'>('tickets');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isRefreshingPWA, setIsRefreshingPWA] = useState(false);
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -240,6 +242,7 @@ export default function App() {
   const [isAddEffortModalOpen, setIsAddEffortModalOpen] = useState(false);
   const [effortTicketSearch, setEffortTicketSearch] = useState('');
   const [effortSelectedTicket, setEffortSelectedTicket] = useState<LocalTicket | null>(null);
+  const [effortRemoteSearchResults, setEffortRemoteSearchResults] = useState<LocalTicket[]>([]);
   const [effortModalHours, setEffortModalHours] = useState('1.0');
   const [effortModalDate, setEffortModalDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [effortModalComment, setEffortModalComment] = useState('');
@@ -467,7 +470,12 @@ export default function App() {
         const single = await syncService.fetchAndCacheSingleTicket(extractedId);
         setIsSearchingRemote(false);
         if (single) {
-          await loadLocalData();
+          setTickets(prev => {
+            const map = new Map<number, LocalTicket>();
+            map.set(single.id, single);
+            prev.forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
+            return Array.from(map.values());
+          });
           setSelectedTicketId(extractedId);
           showEphemeralNotice(`Found & opened #${extractedId}`);
           return;
@@ -477,64 +485,98 @@ export default function App() {
       }
     }
 
-    // 2. Keyword or fallback search
-    const results = await syncService.searchRemoteAndCache(raw);
-    setIsSearchingRemote(false);
-    await loadLocalData();
+    // 2. Keyword search on OpenProject server
+    try {
+      const results = await syncService.searchRemoteAndCache(raw);
+      setIsSearchingRemote(false);
 
-    if (results.length > 0) {
-      if (results.length === 1) {
-        setSelectedTicketId(results[0].id);
+      if (results.length > 0) {
+        setTickets(prev => {
+          const map = new Map<number, LocalTicket>();
+          results.forEach(r => map.set(r.id, r));
+          prev.forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
+          return Array.from(map.values());
+        });
+        if (results.length === 1 && !selectedTicketId) {
+          setSelectedTicketId(results[0].id);
+        }
+        showEphemeralNotice(`Found ${results.length} ticket(s) on OpenProject`);
+      } else {
+        showEphemeralNotice(`No tickets matching "${raw}" found on server`);
       }
-      showEphemeralNotice(`Found & stored ${results.length} ticket(s) locally`);
-    } else {
-      showEphemeralNotice('No tickets found on server');
+    } catch (err) {
+      setIsSearchingRemote(false);
+      showEphemeralNotice('Search query failed');
     }
   };
 
-  // --- Auto-Search OpenProject Server with Debounce (for tickets not yet cached) ---
+  // --- Auto-Search OpenProject Server with Debounce for Main Tickets Search ---
   useEffect(() => {
     const raw = searchQuery.trim();
     if (!raw) return;
 
     const extractedId = extractTicketIdFromUrlOrText(raw);
-    const hasLocalMatch = tickets.some(t => 
-      (extractedId && t.id === extractedId) ||
-      t.subject.toLowerCase().includes(raw.toLowerCase()) ||
-      String(t.id).includes(raw.replace(/^#/, ''))
-    );
-
-    // If already found locally, no need to auto-trigger remote query
-    if (hasLocalMatch) return;
-
-    // Only auto-trigger if it has an extracted ID or at least 3 characters
     if (!extractedId && raw.length < 3) return;
 
     const timer = setTimeout(() => {
       handleRemoteSearch();
-    }, 600);
+    }, 450);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, tickets]);
+  }, [searchQuery]);
 
-  // --- Auto-fetch for Log Effort modal when typing/pasting a ticket ID or URL ---
+  // --- Auto-fetch and Auto-search for Log Effort modal ---
   useEffect(() => {
     if (!isAddEffortModalOpen || effortSelectedTicket) return;
     const raw = effortTicketSearch.trim();
-    if (!raw) return;
+    if (!raw) {
+      setEffortRemoteSearchResults([]);
+      return;
+    }
 
     const extractedId = extractTicketIdFromUrlOrText(raw) || parseInt(raw.replace(/^#/, ''), 10);
-    if (extractedId && !isNaN(extractedId) && extractedId > 0) {
+    const hasValidTargetId = !isNaN(extractedId) && extractedId > 0;
+
+    // If ID, try local first
+    if (hasValidTargetId) {
       const local = tickets.find(t => t.id === extractedId && t.subject && !t.subject.startsWith('Ticket #'));
       if (local) {
         setEffortSelectedTicket(local);
         return;
       }
-      const timer = setTimeout(() => {
-        fetchTicketForEffort(extractedId);
-      }, 400);
-      return () => clearTimeout(timer);
     }
+
+    if (!hasValidTargetId && raw.length < 2) {
+      setEffortRemoteSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsFetchingEffortTicket(true);
+      setEffortTicketFetchError(null);
+      try {
+        if (hasValidTargetId) {
+          const single = await syncService.fetchAndCacheSingleTicket(extractedId);
+          if (single) {
+            setEffortSelectedTicket(single);
+            setEffortTicketSearch('');
+            setEffortRemoteSearchResults([]);
+            return;
+          }
+        }
+        const results = await syncService.searchRemoteAndCache(raw);
+        setEffortRemoteSearchResults(results);
+        if (results.length === 0) {
+          setEffortTicketFetchError(`No tickets matching "${raw}" found on OpenProject.`);
+        }
+      } catch (err: any) {
+        console.warn('Auto search effort error:', err);
+      } finally {
+        setIsFetchingEffortTicket(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
   }, [effortTicketSearch, isAddEffortModalOpen, effortSelectedTicket, tickets]);
 
   // --- Toggle Star (Daily Task) ---
@@ -638,11 +680,18 @@ export default function App() {
     setEffortTicketFetchError(null);
     try {
       const results = await syncService.searchRemoteAndCache(trimmed);
+      setEffortRemoteSearchResults(results);
       if (results.length > 0) {
-        await loadLocalData();
+        setTickets(prev => {
+          const map = new Map<number, LocalTicket>();
+          results.forEach(r => map.set(r.id, r));
+          prev.forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
+          return Array.from(map.values());
+        });
         if (results.length === 1) {
           setEffortSelectedTicket(results[0]);
           setEffortTicketSearch('');
+          setEffortRemoteSearchResults([]);
         }
       } else {
         setEffortTicketFetchError(`No tickets matching "${trimmed}" found on OpenProject.`);
@@ -883,6 +932,36 @@ export default function App() {
     handleSync(true);
   };
 
+  // --- Force Refresh PWA & Clear Cache (Updates to Latest Version) ---
+  const handleRefreshPWA = async () => {
+    setIsRefreshingPWA(true);
+    showEphemeralNotice('Updating PWA & clearing cache...');
+
+    try {
+      // 1. Clear all browser caches
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+      }
+
+      // 2. Unregister or update Service Workers
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const reg of registrations) {
+          await reg.update().catch(() => {});
+          await reg.unregister().catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.warn('PWA cache clear error:', e);
+    }
+
+    // 3. Force reload latest version from server with cache busting
+    setTimeout(() => {
+      window.location.href = window.location.origin + '?v=' + Date.now();
+    }, 400);
+  };
+
   // --- Project Resolution Helper ---
   const uniqueProjects = useMemo(() => {
     const map = new Map<string, string>(); // projectId -> projectName
@@ -1043,13 +1122,24 @@ export default function App() {
     const extractedId = extractTicketIdFromUrlOrText(raw);
     const cleanId = raw.replace(/^#/, '').toLowerCase();
     const q = raw.toLowerCase();
-    return tickets.filter(t => 
+
+    // 1. Local matching tickets
+    const localMatches = tickets.filter(t => 
       (extractedId && t.id === extractedId) ||
       String(t.id).includes(cleanId) ||
       t.subject.toLowerCase().includes(q) ||
       t.project.toLowerCase().includes(q)
-    ).slice(0, 10);
-  }, [tickets, effortTicketSearch]);
+    );
+
+    // 2. Combine with remote search results from OpenProject
+    const map = new Map<number, LocalTicket>();
+    localMatches.forEach(t => map.set(t.id, t));
+    effortRemoteSearchResults.forEach(t => {
+      if (!map.has(t.id)) map.set(t.id, t);
+    });
+
+    return Array.from(map.values()).slice(0, 20);
+  }, [tickets, effortTicketSearch, effortRemoteSearchResults]);
 
   // --- Saved Views Activation & Application ---
   const applySavedView = (view: SavedView) => {
@@ -1402,9 +1492,9 @@ export default function App() {
             </button>
 
             <button 
-              onClick={() => setActiveTab('settings')}
+              onClick={() => setIsSettingsOpen(true)}
               className="p-1.5 text-[#64748b] hover:text-[#f1f5f9] border border-[#1e293b] rounded-lg transition"
-              title="Open Settings"
+              title="Open Settings & OP Key"
             >
               <Settings className="w-4 h-4" />
             </button>
@@ -2109,47 +2199,6 @@ export default function App() {
                 </div>
               </>
             )}
-          </main>
-        )}
-
-        {/* Tab 3: Quick Settings */}
-        {activeTab === 'settings' && (
-          <main className="flex-1 overflow-y-auto p-4 space-y-4">
-            <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9] border-b border-[#1e293b] pb-2">
-              Connection Settings
-            </h3>
-            {settingsNotice && (
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl font-mono">
-                {settingsNotice}
-              </div>
-            )}
-            <div>
-              <label className="block text-xs font-mono uppercase text-[#64748b] mb-1.5">OpenProject Host URL</label>
-              <input 
-                type="text" 
-                value={opUrl}
-                onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
-                onChange={e => setOpUrl(e.target.value)}
-                className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-mono uppercase text-[#64748b] mb-1.5">API Key</label>
-              <input 
-                type="password" 
-                value={opApiKey}
-                onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
-                onChange={e => setOpApiKey(e.target.value)}
-                placeholder="Enter OpenProject API key..."
-                className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
-              />
-            </div>
-            <button 
-              onClick={handleSaveSettings}
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-xl text-xs transition"
-            >
-              Save Credentials & Sync
-            </button>
           </main>
         )}
 
@@ -2863,7 +2912,7 @@ export default function App() {
                         )}
 
                         {/* Matching Tickets List */}
-                        <div className="max-h-40 overflow-y-auto divide-y divide-[#1e293b] border border-[#1e293b] rounded-xl bg-[#090d16]">
+                        <div className="max-h-56 overflow-y-auto divide-y divide-[#1e293b] border border-[#1e293b] rounded-xl bg-[#090d16]">
                           {/* If numeric ID or OP URL, provide direct query option at the top */}
                           {hasValidTargetId && (
                             <div 
@@ -2899,7 +2948,7 @@ export default function App() {
 
                           {effortTicketSearchResults.length === 0 && !isFetchingEffortTicket && effortTicketSearch && (
                             <div className="p-4 text-center text-xs text-[#64748b] space-y-2">
-                              <div>No cached ticket found in local storage.</div>
+                              <div>No tickets found matching "{effortTicketSearch}".</div>
                               {hasValidTargetId ? (
                                 <button
                                   type="button"
@@ -3240,6 +3289,122 @@ export default function App() {
                 >
                   Save View
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Settings & Connection Modal (Only accessible via top Settings button) */}
+        {isSettingsOpen && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150 overflow-hidden"
+            onClick={() => setIsSettingsOpen(false)}
+          >
+            <div 
+              style={{
+                maxHeight: visualViewportHeight ? `${Math.min(visualViewportHeight - 16, 680)}px` : undefined
+              }}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[92%] sm:max-h-[680px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Settings Header */}
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-blue-400" />
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Settings & Connection</h3>
+                </div>
+                <button onClick={() => setIsSettingsOpen(false)} className="p-1 text-[#64748b] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Settings Body */}
+              <div className="p-4 space-y-4 overflow-y-auto overscroll-contain pb-8">
+                {/* Active user status badge */}
+                {currentUser && (
+                  <div className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-blue-600/20 text-blue-400 font-mono text-xs flex items-center justify-center font-bold shrink-0">
+                        {currentUser.name ? currentUser.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : 'OP'}
+                      </div>
+                      <div className="min-w-0 truncate">
+                        <span className="text-xs font-semibold text-[#f1f5f9] block truncate">{currentUser.name}</span>
+                        <span className="text-[10px] font-mono text-[#64748b]">User ID #{currentUser.id}</span>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded border shrink-0 ${isOnline ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>
+                      {isOnline ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                )}
+
+                {/* Status Notice */}
+                {settingsNotice && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl font-mono">
+                    {settingsNotice}
+                  </div>
+                )}
+
+                {/* Host URL input */}
+                <div>
+                  <label className="block text-xs font-mono uppercase text-[#64748b] mb-1.5">OpenProject Host URL</label>
+                  <input 
+                    type="text" 
+                    value={opUrl}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
+                    onChange={e => setOpUrl(e.target.value)}
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
+                  />
+                </div>
+
+                {/* OP Key input */}
+                <div>
+                  <label className="block text-xs font-mono uppercase text-[#64748b] mb-1.5">OpenProject API Key</label>
+                  <input 
+                    type="password" 
+                    value={opApiKey}
+                    onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
+                    onChange={e => setOpApiKey(e.target.value)}
+                    placeholder="Enter OpenProject API key..."
+                    className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-3 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
+                  />
+                  <span className="text-[10px] text-[#64748b] font-mono mt-1 block">
+                    Saved locally on this device. Used for fetching tickets, logging efforts, and loading attachments.
+                  </span>
+                </div>
+
+                {/* Save credentials button */}
+                <button 
+                  onClick={async () => {
+                    await handleSaveSettings();
+                    setIsSettingsOpen(false);
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 rounded-xl text-xs transition font-mono flex items-center justify-center gap-2 shadow-lg shadow-blue-900/30"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Credentials & Sync</span>
+                </button>
+
+                {/* Section Divider: PWA & Cache Management */}
+                <div className="pt-3 border-t border-[#1e293b] space-y-2">
+                  <span className="text-[11px] font-mono uppercase text-[#64748b] block">
+                    PWA Updates & Cache
+                  </span>
+
+                  {/* Refresh PWA Button */}
+                  <button
+                    type="button"
+                    disabled={isRefreshingPWA}
+                    onClick={handleRefreshPWA}
+                    className="w-full bg-[#090d16] hover:bg-[#1e293b] border border-[#1e293b] hover:border-slate-600 text-slate-200 py-2.5 px-3 rounded-xl text-xs font-mono transition flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw className={`w-4 h-4 text-emerald-400 ${isRefreshingPWA ? 'animate-spin' : ''}`} />
+                    <span>{isRefreshingPWA ? 'Updating PWA & Cache...' : 'Refresh PWA & Clear Cache'}</span>
+                  </button>
+                  <span className="text-[10px] text-[#64748b] font-mono block text-center">
+                    Purges service worker cache, loads the newest app deployment, and reloads the page.
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -3616,8 +3781,8 @@ export default function App() {
           </div>
         )}
 
-        {/* Bottom Tab Bar */}
-        <nav className="border-t border-[#1e293b] bg-[#0f172a] grid grid-cols-3 shrink-0">
+        {/* Bottom Tab Bar (Tickets and Efforts) */}
+        <nav className="border-t border-[#1e293b] bg-[#0f172a] grid grid-cols-2 shrink-0">
           <button
             onClick={() => {
               setActiveTab('tickets');
@@ -3639,16 +3804,6 @@ export default function App() {
           >
             <Clock className="w-4 h-4" />
             <span className="text-[10px] uppercase font-mono tracking-wider">Efforts</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`py-3 flex flex-col items-center gap-1 transition ${
-              activeTab === 'settings' ? 'text-blue-400 font-medium' : 'text-[#64748b] hover:text-[#f1f5f9]'
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            <span className="text-[10px] uppercase font-mono tracking-wider">Settings</span>
           </button>
         </nav>
 
