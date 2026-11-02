@@ -327,6 +327,7 @@ export default function App() {
   const [editEffortComment, setEditEffortComment] = useState('');
   const [isSavingEditEffort, setIsSavingEditEffort] = useState(false);
   const [isDeletingEffort, setIsDeletingEffort] = useState(false);
+  const [deletingEffortId, setDeletingEffortId] = useState<string | null>(null);
 
   // Settings
   const [opUrl, setOpUrl] = useState('https://openproject.fingent.net');
@@ -946,6 +947,19 @@ export default function App() {
       }
     }
 
+    // Update ticketEffortsList if open
+    setTicketEffortsList(prev => prev.map(e => {
+      const isMatch = e.id === updatedEffort.id || e.id === `pending-${updatedEffort.id}` || (editingEffort && (e.id === editingEffort.id || e.id === `pending-${editingEffort.id}`));
+      if (!isMatch) return e;
+      return {
+        ...e,
+        hours: newHours,
+        spentOn: editEffortDate,
+        comment: editEffortComment,
+        pendingSync: !synced
+      };
+    }));
+
     setIsSavingEditEffort(false);
     setEditingEffort(null);
     showEphemeralNotice(`Updated #${editingEffort.workPackageId} to ${newHours}h (${synced ? 'Synced with OP' : 'Saved locally'})`);
@@ -953,17 +967,107 @@ export default function App() {
 
   const handleDeleteEffort = async (effort: LocalEffort) => {
     setIsDeletingEffort(true);
+    setDeletingEffortId(effort.id);
 
-    // 1. Remove from DB and React state
-    await db.deleteEffort(effort.id);
-    setAllEfforts(prev => prev.filter(e => e.id !== effort.id));
+    try {
+      // 1. Remove from DB and React state
+      await db.deleteEffort(effort.id);
+      setAllEfforts(prev => prev.filter(e => e.id !== effort.id));
+      setTicketEffortsList(prev => prev.filter(e => e.id !== effort.id && e.id !== `pending-${effort.id}`));
 
-    // 2. Adjust spentTime on local ticket
-    if (effort.workPackageId) {
-      const t = tickets.find(item => item.id === effort.workPackageId);
+      // 2. Adjust spentTime on local ticket
+      if (effort.workPackageId) {
+        const t = tickets.find(item => item.id === effort.workPackageId);
+        if (t) {
+          const currentSpent = parseDurationToHours(t.spentTime);
+          const updatedSpent = Math.max(0, +(currentSpent - effort.hours).toFixed(2));
+          const updatedTicket: LocalTicket = {
+            ...t,
+            spentTime: `PT${Math.floor(updatedSpent)}H${Math.round((updatedSpent % 1) * 60)}M`
+          };
+          await db.putTicket(updatedTicket);
+          setTickets(prev => prev.map(item => item.id === t.id ? updatedTicket : item));
+        }
+      }
+
+      // 3. Sync deletion to OpenProject
+      const isLocalTempId = effort.id.startsWith('effort_') || effort.id.startsWith('pending-');
+      if (navigator.onLine && !isLocalTempId) {
+        try {
+          await OpenProjectService.deleteTimeEntry(effort.id);
+        } catch (err) {
+          console.warn('[Effort] Remote delete sync failed, enqueueing:', err);
+          await db.enqueueSyncItem({
+            id: `del_time_${effort.id}_${Date.now()}`,
+            type: 'DELETE_TIME',
+            payload: { id: effort.id },
+            createdAt: new Date().toISOString(),
+            retryCount: 0
+          });
+        }
+      }
+
+      showEphemeralNotice(`Deleted ${effort.hours}h log for #${effort.workPackageId}`);
+    } finally {
+      setIsDeletingEffort(false);
+      setDeletingEffortId(null);
+      setEditingEffort(null);
+    }
+  };
+
+  const handleDeleteTicketHistoryEntry = async (entry: {
+    id: string;
+    hours: number;
+    spentOn: string;
+    userName: string;
+    userId?: string;
+    comment: string;
+    activity?: string;
+    pendingSync?: boolean;
+  }) => {
+    if (!selectedTicketId) return;
+    const cleanId = entry.id.replace(/^pending-/, '');
+
+    const confirmed = window.confirm(`Delete ${entry.hours}h time entry (${entry.spentOn})?`);
+    if (!confirmed) return;
+
+    setDeletingEffortId(entry.id);
+
+    try {
+      // 1. Remove from OpenProject if online and not a local temp id
+      const isLocalTempId = cleanId.startsWith('effort_');
+      if (navigator.onLine && !isLocalTempId) {
+        try {
+          await OpenProjectService.deleteTimeEntry(cleanId);
+        } catch (err: any) {
+          console.warn('[Ticket Viewer] Failed to delete time entry on OP:', err);
+          const errMsg = err?.response?.data?.message || err?.message || 'Permission denied or network error';
+          showEphemeralNotice(`Could not delete from OpenProject: ${errMsg}`);
+          return;
+        }
+      } else if (!isLocalTempId) {
+        await db.enqueueSyncItem({
+          id: `del_time_${cleanId}_${Date.now()}`,
+          type: 'DELETE_TIME',
+          payload: { id: cleanId },
+          createdAt: new Date().toISOString(),
+          retryCount: 0
+        });
+      }
+
+      // 2. Remove from ticketEffortsList
+      setTicketEffortsList(prev => prev.filter(e => e.id !== entry.id && e.id !== cleanId && e.id !== `pending-${cleanId}`));
+
+      // 3. Remove from local efforts DB & state
+      await db.deleteEffort(cleanId);
+      await db.deleteEffort(entry.id);
+      setAllEfforts(prev => prev.filter(e => e.id !== cleanId && e.id !== entry.id));
+
+      // 4. Adjust spentTime on local ticket
+      const t = tickets.find(item => item.id === selectedTicketId);
       if (t) {
         const currentSpent = parseDurationToHours(t.spentTime);
-        const updatedSpent = Math.max(0, +(currentSpent - effort.hours).toFixed(2));
+        const updatedSpent = Math.max(0, +(currentSpent - entry.hours).toFixed(2));
         const updatedTicket: LocalTicket = {
           ...t,
           spentTime: `PT${Math.floor(updatedSpent)}H${Math.round((updatedSpent % 1) * 60)}M`
@@ -971,28 +1075,11 @@ export default function App() {
         await db.putTicket(updatedTicket);
         setTickets(prev => prev.map(item => item.id === t.id ? updatedTicket : item));
       }
-    }
 
-    // 3. Sync deletion to OpenProject
-    const isLocalTempId = effort.id.startsWith('effort_');
-    if (navigator.onLine && !isLocalTempId) {
-      try {
-        await OpenProjectService.deleteTimeEntry(effort.id);
-      } catch (err) {
-        console.warn('[Effort] Remote delete sync failed, enqueueing:', err);
-        await db.enqueueSyncItem({
-          id: `del_time_${effort.id}_${Date.now()}`,
-          type: 'DELETE_TIME',
-          payload: { id: effort.id },
-          createdAt: new Date().toISOString(),
-          retryCount: 0
-        });
-      }
+      showEphemeralNotice(`Deleted ${entry.hours}h time entry`);
+    } finally {
+      setDeletingEffortId(null);
     }
-
-    setIsDeletingEffort(false);
-    setEditingEffort(null);
-    showEphemeralNotice(`Deleted ${effort.hours}h log for #${effort.workPackageId}`);
   };
 
   // --- Save Connection Settings ---
@@ -2276,15 +2363,53 @@ export default function App() {
                               <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
                             )}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditEffort(e)}
-                            className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
-                            title="Edit Logged Effort"
-                          >
-                            <Pencil className="w-3 h-3 text-blue-400" />
-                            <span>Edit</span>
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditEffort(e)}
+                                className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
+                                title="Edit Logged Effort"
+                              >
+                                <Pencil className="w-3 h-3 text-blue-400" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deletingEffortId === e.id}
+                                onClick={() => {
+                                  if (window.confirm(`Delete ${e.hours}h log for #${e.workPackageId}?`)) {
+                                    handleDeleteEffort(e);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-[#1e293b] text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-900/40 transition flex items-center justify-center disabled:opacity-50"
+                                title="Delete Logged Effort"
+                              >
+                                {deletingEffortId === e.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                                ) : (
+                                  <Trash2 className="w-3 h-3" />
+                                )}
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={deletingEffortId === e.id}
+                              onClick={() => {
+                                if (window.confirm(`Delete ${e.hours}h log for #${e.workPackageId}?`)) {
+                                  handleDeleteEffort(e);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg bg-[#1e293b] text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-900/40 transition flex items-center justify-center disabled:opacity-50"
+                              title="Delete Logged Effort"
+                            >
+                              {deletingEffortId === e.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                              ) : (
+                                <Trash2 className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -2451,15 +2576,34 @@ export default function App() {
                                 <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditEffort(e)}
-                              className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
-                              title="Edit Logged Effort"
-                            >
-                              <Pencil className="w-3 h-3 text-blue-400" />
-                              <span>Edit</span>
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditEffort(e)}
+                                className="p-1.5 rounded-lg bg-[#1e293b] text-slate-300 hover:text-white hover:bg-slate-700 transition flex items-center gap-1 text-[11px] font-mono"
+                                title="Edit Logged Effort"
+                              >
+                                <Pencil className="w-3 h-3 text-blue-400" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deletingEffortId === e.id}
+                                onClick={() => {
+                                  if (window.confirm(`Delete ${e.hours}h log for #${e.workPackageId}?`)) {
+                                    handleDeleteEffort(e);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-[#1e293b] text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 border border-transparent hover:border-rose-900/40 transition flex items-center justify-center disabled:opacity-50"
+                                title="Delete Logged Effort"
+                              >
+                                {deletingEffortId === e.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                                ) : (
+                                  <Trash2 className="w-3 h-3" />
+                                )}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -3472,7 +3616,11 @@ export default function App() {
                   <button
                     type="button"
                     disabled={isDeletingEffort || isSavingEditEffort}
-                    onClick={() => handleDeleteEffort(editingEffort)}
+                    onClick={() => {
+                      if (window.confirm(`Delete this ${editingEffort.hours}h effort entry?`)) {
+                        handleDeleteEffort(editingEffort);
+                      }
+                    }}
                     className="p-3 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 text-red-400 rounded-xl text-xs font-mono font-medium flex items-center justify-center gap-1.5 transition"
                     title="Delete Effort Log"
                   >
@@ -4075,10 +4223,43 @@ export default function App() {
                             </p>
                           )}
                         </div>
-                        <div className="shrink-0 text-right">
+                        <div className="shrink-0 flex items-center gap-1.5">
                           <span className="font-mono font-bold text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                             +{entry.hours}h
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cleanId = entry.id.replace(/^pending-/, '');
+                              handleOpenEditEffort({
+                                id: cleanId,
+                                workPackageId: selectedTicketId!,
+                                ticketSubject: selectedTicket?.subject || `Ticket #${selectedTicketId}`,
+                                hours: entry.hours,
+                                comment: entry.comment,
+                                spentOn: entry.spentOn,
+                                createdAt: new Date().toISOString(),
+                                pendingSync: entry.pendingSync
+                              });
+                            }}
+                            className="p-1 rounded-lg bg-[#090d16] border border-[#1e293b] text-slate-400 hover:text-blue-400 hover:border-blue-900/50 transition flex items-center justify-center"
+                            title="Edit Effort"
+                          >
+                            <Pencil className="w-3 h-3 text-blue-400" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingEffortId === entry.id}
+                            onClick={() => handleDeleteTicketHistoryEntry(entry)}
+                            className="p-1 rounded-lg bg-[#090d16] border border-[#1e293b] text-slate-400 hover:text-rose-400 hover:border-rose-900/50 hover:bg-rose-950/30 transition flex items-center justify-center disabled:opacity-50"
+                            title="Delete Effort"
+                          >
+                            {deletingEffortId === entry.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                            ) : (
+                              <Trash2 className="w-3 h-3" />
+                            )}
+                          </button>
                         </div>
                       </div>
                     ))}
