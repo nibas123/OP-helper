@@ -10,19 +10,48 @@ export interface SyncStatus {
 }
 
 /**
- * Parses OpenProject ISO duration PT1H30M to float hours (1.5)
+ * Parses OpenProject ISO duration (e.g. PT1H30M, P28DT13H36M, P2DT9H42M, PT45M, P4DT4H, 1.5) to float hours
  */
 export function parseDurationToHours(str?: string | null): number {
   if (!str) return 0;
-  if (str.startsWith('PT')) {
-    const hoursMatch = str.match(/(\d+)H/);
-    const minsMatch = str.match(/(\d+)M/);
-    const h = hoursMatch ? parseInt(hoursMatch[1], 10) : 0;
-    const m = minsMatch ? parseInt(minsMatch[1], 10) : 0;
-    return +(h + m / 60).toFixed(2);
+  if (typeof str === 'number') return str;
+  const s = String(str).trim();
+  if (s.startsWith('P')) {
+    // ISO 8601 duration: P[nY][nM][nW][nD][T[nH][nM][nS]]
+    let days = 0, hours = 0, minutes = 0, seconds = 0, weeks = 0;
+    const parts = s.split('T');
+    const datePart = parts[0];
+    const timePart = parts[1] || '';
+
+    const weeksMatch = datePart.match(/(\d+(?:\.\d+)?)W/i);
+    if (weeksMatch) weeks = parseFloat(weeksMatch[1]);
+
+    const daysMatch = datePart.match(/(\d+(?:\.\d+)?)D/i);
+    if (daysMatch) days = parseFloat(daysMatch[1]);
+
+    const hoursMatch = timePart.match(/(\d+(?:\.\d+)?)H/i);
+    if (hoursMatch) hours = parseFloat(hoursMatch[1]);
+
+    const minsMatch = timePart.match(/(\d+(?:\.\d+)?)M/i);
+    if (minsMatch) minutes = parseFloat(minsMatch[1]);
+
+    const secsMatch = timePart.match(/(\d+(?:\.\d+)?)S/i);
+    if (secsMatch) seconds = parseFloat(secsMatch[1]);
+
+    const totalHours = (weeks * 168) + (days * 24) + hours + (minutes / 60) + (seconds / 3600);
+    return +(totalHours.toFixed(2));
   }
-  const floatVal = parseFloat(str);
-  return isNaN(floatVal) ? 0 : floatVal;
+  const floatVal = parseFloat(s);
+  return isNaN(floatVal) ? 0 : +(floatVal.toFixed(2));
+}
+
+/**
+ * Formats float hours into clean display string, e.g. 1.5 -> "1.5h" or 57.7 -> "57.7h"
+ */
+export function formatDurationHours(hours?: number | null): string {
+  if (!hours || isNaN(hours) || hours <= 0) return '0h';
+  const rounded = +(hours.toFixed(2));
+  return `${rounded}h`;
 }
 
 export const syncService = {

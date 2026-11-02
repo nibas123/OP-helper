@@ -246,6 +246,13 @@ export const OpenProjectService = {
     return response.data;
   },
 
+  getTimeEntriesForWorkPackage: async (workPackageId: number | string, pageSize = 30) => {
+    const client = await getApiClient();
+    const filter = JSON.stringify([{ "work_package_id": { "operator": "=", "values": [String(workPackageId)] } }]);
+    const response = await client.get(`/time_entries?filters=${encodeURIComponent(filter)}&pageSize=${pageSize}&sortBy=[["spent_on","desc"]]`);
+    return response.data;
+  },
+
   getTimeEntriesForDate: async (dateStr: string) => {
     const client = await getApiClient();
     const filter = JSON.stringify([

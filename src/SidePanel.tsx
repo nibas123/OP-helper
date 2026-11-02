@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Settings, CheckCircle, Clock, Search, Sun, Moon, ArrowLeft, Save, Loader2, AlertCircle, LayoutDashboard } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { OpenProjectService } from './services/OpenProjectService';
+import { parseDurationToHours, formatDurationHours } from './services/syncService';
 import { sendWebhook } from './utils/webhook';
 import { useTheme } from './hooks/useTheme';
 
@@ -166,15 +167,8 @@ export default function SidePanel() {
 
   const formatTime = (timeStr: string | null) => {
     if (!timeStr) return null;
-    if (timeStr.startsWith('PT')) {
-      const match = timeStr.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
-      if (match) {
-        const h = match[1] || '0';
-        const m = match[2] || '0';
-        return `${h}h ${m}m`;
-      }
-    }
-    return `${timeStr}h`;
+    const hrs = parseDurationToHours(timeStr);
+    return formatDurationHours(hrs);
   };
 
   const estimatedTime = formatTime(ticket?.estimatedTime) || '-';

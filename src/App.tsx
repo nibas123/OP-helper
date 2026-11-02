@@ -207,6 +207,19 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRefreshingPWA, setIsRefreshingPWA] = useState(false);
 
+  // Selected ticket effort history & live fetch
+  const [ticketEffortsList, setTicketEffortsList] = useState<{
+    id: string;
+    hours: number;
+    spentOn: string;
+    userName: string;
+    userId?: string;
+    comment: string;
+    activity?: string;
+    pendingSync?: boolean;
+  }[]>([]);
+  const [isLoadingTicketEfforts, setIsLoadingTicketEfforts] = useState(false);
+
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchingRemote, setIsSearchingRemote] = useState(false);
@@ -730,6 +743,22 @@ export default function App() {
     await db.putEffort(newEffort);
     setAllEfforts(prev => [newEffort, ...prev]);
 
+    // If currently viewing this ticket in modal, immediately prepend to effort history
+    if (selectedTicketId === targetTicketId) {
+      setTicketEffortsList(prev => [
+        {
+          id: newEffort.id,
+          hours: newEffort.hours,
+          spentOn: newEffort.spentOn,
+          userName: currentUser.name || 'You',
+          userId: currentUser.id,
+          comment: newEffort.comment,
+          pendingSync: true
+        },
+        ...prev
+      ]);
+    }
+
     // Update spentTime on local ticket if present
     const t = tickets.find(ticket => ticket.id === targetTicketId);
     if (t) {
@@ -752,6 +781,9 @@ export default function App() {
         newEffort.pendingSync = false;
         await db.putEffort(newEffort);
         setAllEfforts(prev => prev.map(e => e.id === newEffort.id ? { ...e, pendingSync: false } : e));
+        if (selectedTicketId === targetTicketId) {
+          setTicketEffortsList(prev => prev.map(e => e.id === newEffort.id ? { ...e, pendingSync: false } : e));
+        }
         syncedImmediately = true;
       } catch (err) {
         console.warn('[Effort] Immediate sync failed, enqueuing for sync:', err);
@@ -1074,6 +1106,128 @@ export default function App() {
     if (!q) return selectedTicketProjectAssignees;
     return selectedTicketProjectAssignees.filter(u => u.name.toLowerCase().includes(q));
   }, [selectedTicketProjectAssignees, assigneePickerSearch]);
+
+  // Selected ticket effort stats & aggregated totals
+  const selectedTicketStats = useMemo(() => {
+    if (!selectedTicket) {
+      return { spentHours: 0, estimatedHours: 0, mySpentHours: 0, percent: null, remainingHours: null };
+    }
+
+    // 1. Base spent hours from OpenProject ticket spentTime
+    let spentHours = parseDurationToHours(selectedTicket.spentTime);
+
+    // 2. Sum of ticket efforts list if spentTime was 0 or list is larger
+    const remoteListSum = ticketEffortsList.reduce((acc, curr) => acc + (curr.hours || 0), 0);
+    if (!spentHours || remoteListSum > spentHours) {
+      spentHours = +(remoteListSum.toFixed(2));
+    }
+
+    // 3. Include any local efforts that are pendingSync
+    const pendingEfforts = allEfforts.filter(e => e.workPackageId === selectedTicket.id && e.pendingSync);
+    const pendingSum = pendingEfforts.reduce((acc, curr) => acc + (curr.hours || 0), 0);
+    if (pendingSum > 0) {
+      spentHours = +(spentHours + pendingSum).toFixed(2);
+    }
+
+    // 4. Estimated hours
+    const estimatedHours = parseDurationToHours(selectedTicket.estimatedTime);
+
+    // 5. User's own logged effort on this ticket
+    const myLocalSum = allEfforts
+      .filter(e => e.workPackageId === selectedTicket.id)
+      .reduce((acc, curr) => acc + (curr.hours || 0), 0);
+    const myRemoteSum = ticketEffortsList
+      .filter(e => currentUser?.id && String(e.userId) === String(currentUser.id))
+      .reduce((acc, curr) => acc + (curr.hours || 0), 0);
+    const mySpentHours = +(Math.max(myLocalSum, myRemoteSum).toFixed(2));
+
+    const percent = estimatedHours > 0 ? Math.round((spentHours / estimatedHours) * 100) : null;
+    const remainingHours = estimatedHours > 0 ? +(Math.max(0, estimatedHours - spentHours).toFixed(2)) : null;
+
+    return { spentHours, estimatedHours, mySpentHours, percent, remainingHours };
+  }, [selectedTicket, ticketEffortsList, allEfforts, currentUser]);
+
+  // Automatically fetch up-to-date ticket details and time entries when a ticket is opened
+  useEffect(() => {
+    if (!selectedTicketId) {
+      setTicketEffortsList([]);
+      setIsLoadingTicketEfforts(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingTicketEfforts(true);
+
+    // 1. Fetch up-to-date work package details from OpenProject in background
+    syncService.fetchAndCacheSingleTicket(selectedTicketId).then((refreshed) => {
+      if (refreshed && isMounted) {
+        setTickets(prev => {
+          const idx = prev.findIndex(t => t.id === selectedTicketId);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = refreshed;
+            return next;
+          }
+          return [refreshed, ...prev];
+        });
+      }
+    }).catch(() => {});
+
+    // 2. Fetch logged time entries for this work package
+    OpenProjectService.getTimeEntriesForWorkPackage(selectedTicketId, 30)
+      .then((data) => {
+        if (!isMounted) return;
+        const elements = data?._embedded?.elements || [];
+        const formatted = elements.map((e: any) => ({
+          id: String(e.id),
+          hours: parseDurationToHours(e.hours),
+          spentOn: e.spentOn,
+          userName: e._links?.user?.title || 'Unknown User',
+          userId: e._links?.user?.href ? e._links.user.href.split('/').pop() : undefined,
+          comment: e.comment?.raw || '',
+          activity: e._links?.activity?.title || ''
+        }));
+
+        // Merge with any local pending efforts for this ticket
+        const localPending = allEfforts
+          .filter(e => e.workPackageId === selectedTicketId && e.pendingSync)
+          .map(e => ({
+            id: `pending-${e.id}`,
+            hours: e.hours,
+            spentOn: e.spentOn,
+            userName: currentUser.name || 'You',
+            userId: currentUser.id,
+            comment: e.comment || '',
+            pendingSync: true
+          }));
+
+        setTicketEffortsList([...localPending, ...formatted]);
+      })
+      .catch((err) => {
+        console.warn('[Ticket Viewer] Failed to fetch time entries:', err);
+        if (isMounted) {
+          const localEntries = allEfforts
+            .filter(e => e.workPackageId === selectedTicketId)
+            .map(e => ({
+              id: e.id,
+              hours: e.hours,
+              spentOn: e.spentOn,
+              userName: currentUser.name || 'You',
+              userId: currentUser.id,
+              comment: e.comment || '',
+              pendingSync: e.pendingSync
+            }));
+          setTicketEffortsList(localEntries);
+        }
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingTicketEfforts(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTicketId, currentUser]);
 
   // Assignees strictly associated with the currently filtered projects in drawer
   const filterDrawerAssignees = useMemo(() => {
@@ -3472,6 +3626,74 @@ export default function App() {
                 </h2>
               </div>
 
+              {/* Effort & Time Summary Banner */}
+              <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-mono uppercase text-[#64748b] tracking-wider">
+                    <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Effort & Time Tracking</span>
+                  </div>
+                  {isLoadingTicketEfforts && (
+                    <div className="flex items-center gap-1 text-[10px] font-mono text-[#64748b]">
+                      <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                      <span>Syncing...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3-Column Stats Grid */}
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl p-2.5">
+                    <span className="text-[10px] font-mono uppercase text-[#64748b] block mb-0.5">Total Spent</span>
+                    <span className="text-sm font-mono font-bold text-emerald-400">
+                      {selectedTicketStats.spentHours}h
+                    </span>
+                  </div>
+
+                  <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl p-2.5">
+                    <span className="text-[10px] font-mono uppercase text-[#64748b] block mb-0.5">Estimated</span>
+                    <span className="text-sm font-mono font-bold text-[#f1f5f9]">
+                      {selectedTicketStats.estimatedHours > 0 ? `${selectedTicketStats.estimatedHours}h` : '-'}
+                    </span>
+                  </div>
+
+                  <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl p-2.5">
+                    <span className="text-[10px] font-mono uppercase text-[#64748b] block mb-0.5">Your Effort</span>
+                    <span className="text-sm font-mono font-bold text-blue-400">
+                      {selectedTicketStats.mySpentHours > 0 ? `${selectedTicketStats.mySpentHours}h` : '0h'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Progress Bar (if estimated hours exist) */}
+                {selectedTicketStats.estimatedHours > 0 && (
+                  <div className="space-y-1.5 pt-0.5">
+                    <div className="flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-[#64748b]">
+                        Progress ({selectedTicketStats.percent}%)
+                      </span>
+                      <span className={selectedTicketStats.spentHours > selectedTicketStats.estimatedHours ? 'text-amber-400 font-semibold' : 'text-slate-400'}>
+                        {selectedTicketStats.remainingHours !== null && selectedTicketStats.remainingHours > 0 
+                          ? `${selectedTicketStats.remainingHours}h remaining` 
+                          : selectedTicketStats.spentHours > selectedTicketStats.estimatedHours
+                            ? `+${+(selectedTicketStats.spentHours - selectedTicketStats.estimatedHours).toFixed(2)}h over estimate`
+                            : 'Estimate reached'}
+                      </span>
+                    </div>
+                    <div className="w-full bg-[#0f172a] rounded-full h-1.5 overflow-hidden border border-[#1e293b]">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          selectedTicketStats.spentHours > selectedTicketStats.estimatedHours 
+                            ? 'bg-amber-400' 
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(100, selectedTicketStats.percent || 0)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Real OpenProject Status Selector */}
               <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-3.5 space-y-2">
                 <span className="text-xs font-mono uppercase text-[#64748b] tracking-wider block">
@@ -3566,7 +3788,7 @@ export default function App() {
                   </span>
                   <div className="text-right">
                     <span className="text-xs font-mono text-emerald-400 font-bold">
-                      {selectedTicket.spentTime ? `${parseDurationToHours(selectedTicket.spentTime)}h` : '0h'} Spent
+                      {selectedTicketStats.spentHours}h Logged
                     </span>
                   </div>
                 </div>
@@ -3620,6 +3842,79 @@ export default function App() {
                     Log Custom Effort
                   </button>
                 </div>
+              </div>
+
+              {/* Logged Efforts History on Ticket */}
+              <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-mono uppercase text-[#64748b] tracking-wider">
+                      Effort History
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-slate-300">
+                      {ticketEffortsList.length}
+                    </span>
+                  </div>
+                  {isLoadingTicketEfforts && (
+                    <div className="flex items-center gap-1 text-[10px] font-mono text-[#64748b]">
+                      <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                      <span>Fetching...</span>
+                    </div>
+                  )}
+                </div>
+
+                {isLoadingTicketEfforts && ticketEffortsList.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-[#64748b] font-mono flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                    <span>Loading logged efforts...</span>
+                  </div>
+                ) : ticketEffortsList.length === 0 ? (
+                  <p className="text-xs text-[#64748b] italic py-1">No efforts logged yet on this ticket.</p>
+                ) : (
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {ticketEffortsList.map(entry => (
+                      <div 
+                        key={entry.id}
+                        className="bg-[#0f172a] border border-[#1e293b] rounded-xl p-2.5 flex items-start justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-[#f1f5f9] truncate max-w-[140px]">
+                              {entry.userName}
+                            </span>
+                            <span className="text-[10px] font-mono text-[#64748b]">
+                              {entry.spentOn}
+                            </span>
+                            {entry.activity && (
+                              <span className="text-[9px] font-mono px-1 py-0.2 rounded border border-[#1e293b] text-slate-400">
+                                {entry.activity}
+                              </span>
+                            )}
+                            {entry.pendingSync && (
+                              <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                Pending
+                              </span>
+                            )}
+                          </div>
+                          {entry.comment ? (
+                            <p className="text-[11px] text-slate-300 break-words line-clamp-2">
+                              {entry.comment}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-[#64748b] italic">
+                              No comment
+                            </p>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <span className="font-mono font-bold text-xs text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                            +{entry.hours}h
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
             </div>
