@@ -1394,6 +1394,12 @@ export default function App() {
     });
   };
 
+  // Extracted ticket ID from search query if user pasted a URL or #ID
+  const searchExtractedId = useMemo(() => {
+    if (!searchQuery) return null;
+    return extractTicketIdFromUrlOrText(searchQuery) || null;
+  }, [searchQuery]);
+
   // --- Filtered & Sorted Tickets ---
   const filteredTickets = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
@@ -1589,9 +1595,9 @@ export default function App() {
       >
 
         {/* Top Header */}
-        <header className="p-3.5 border-b border-[#1e293b] bg-[#0f172a]/95 backdrop-blur-md sticky top-0 z-20 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs font-bold tracking-wider px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+        <header className="p-3 border-b border-[#1e293b] bg-[#0f172a]/95 backdrop-blur-md sticky top-0 z-20 flex items-center justify-between shrink-0 gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="font-mono text-xs font-bold tracking-wider px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0">
               OP MOBILE
             </span>
 
@@ -1599,37 +1605,25 @@ export default function App() {
             <button 
               onClick={() => handleSync(true)} 
               disabled={isSyncing}
-              className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-[#1e293b] bg-[#090d16] hover:border-blue-500/50 text-[11px] font-mono transition"
-              title="Click to Sync Now"
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-blue-500/50 text-[11px] font-mono transition shrink-0"
+              title="Click to Sync with OpenProject"
             >
               <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin text-blue-400' : isOnline ? 'text-emerald-400' : 'text-amber-400'}`} />
-              <span className="text-slate-300 uppercase tracking-tight">
-                {isSyncing ? 'SYNCING' : lastSyncText}
+              <span className="text-slate-300 uppercase tracking-tight text-[10px]">
+                {isSyncing ? 'SYNC' : lastSyncText}
               </span>
             </button>
 
             {pendingCount > 0 && (
-              <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <span className="font-mono text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-bold shrink-0">
                 {pendingCount} PENDING
               </span>
             )}
           </div>
 
-          {/* Effort Summary Gauge, Quick Add Effort & Settings Icon */}
-          <div className="flex items-center gap-2">
-            <div className="text-right">
-              <div className="text-xs font-mono font-semibold text-emerald-400 leading-none">
-                {todayTotalHours.toFixed(1)}h <span className="text-[#64748b] font-normal text-[11px]">/ 8h</span>
-              </div>
-              <div className="w-14 h-1 bg-[#1e293b] rounded-full mt-1 overflow-hidden">
-                <div 
-                  className="h-full bg-emerald-500 rounded-full transition-all" 
-                  style={{ width: `${Math.min(100, (todayTotalHours / 8) * 100)}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Quick Add Effort Shortcut Button */}
+          {/* Effort Summary Pill & Settings Icon */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Quick Effort Pill (Tapping opens Log Effort modal) */}
             <button
               onClick={() => {
                 setIsAddEffortModalOpen(true);
@@ -1639,15 +1633,18 @@ export default function App() {
                 setEffortModalComment('');
                 setEffortModalHours('1.0');
               }}
-              className="p-1.5 text-emerald-400 hover:text-white border border-emerald-500/30 bg-emerald-500/10 rounded-lg transition"
-              title="Log effort on any ticket"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 transition group"
+              title={`Logged today: ${todayTotalHours.toFixed(1)}h / 8h (Tap to log effort)`}
             >
-              <Clock className="w-4 h-4" />
+              <Clock className="w-3.5 h-3.5 shrink-0" />
+              <span className="font-mono text-xs font-bold leading-none">{todayTotalHours.toFixed(1)}h</span>
+              <span className="font-mono text-[10px] text-[#64748b] leading-none">/8h</span>
             </button>
 
+            {/* Settings Modal Button */}
             <button 
               onClick={() => setIsSettingsOpen(true)}
-              className="p-1.5 text-[#64748b] hover:text-[#f1f5f9] border border-[#1e293b] rounded-lg transition"
+              className="p-1.5 text-[#94a3b8] hover:text-[#f1f5f9] border border-[#1e293b] bg-[#090d16] hover:bg-[#1e293b] rounded-xl transition shrink-0"
               title="Open Settings & OP Key"
             >
               <Settings className="w-4 h-4" />
@@ -1697,51 +1694,41 @@ export default function App() {
           <div className="p-3 border-b border-[#1e293b] bg-[#090d16]/70 shrink-0 space-y-2">
             
             {/* Search Bar with Remote Search Trigger & Filter Trigger */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
               <div className="relative flex-1 flex items-center">
-                <Search className="w-4 h-4 absolute left-3 text-[#64748b]" />
+                <Search className="w-4 h-4 absolute left-3 text-[#64748b] pointer-events-none" />
                 <input 
                   type="text" 
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') handleRemoteSearch(); }}
                   placeholder="Search #ID, subject, assignee, or details..."
-                  className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-14 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b] transition"
+                  className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-16 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b] transition"
                 />
                 
                 <div className="absolute right-2 flex items-center gap-1">
+                  {isSearchingRemote && (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                  )}
                   {searchQuery && (
-                    <button onClick={() => setSearchQuery('')} className="text-[#64748b] hover:text-white p-1">
+                    <button onClick={() => setSearchQuery('')} className="text-[#64748b] hover:text-white p-1 rounded transition" title="Clear">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   )}
                   <button 
                     onClick={checkClipboard}
                     title="Paste / Detect link from Clipboard"
-                    className="text-[#64748b] hover:text-blue-400 p-1"
+                    className="text-[#64748b] hover:text-blue-400 p-1 rounded transition"
                   >
                     <Clipboard className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
 
-              {/* Remote Search Button */}
-              {searchQuery && (
-                <button
-                  onClick={handleRemoteSearch}
-                  disabled={isSearchingRemote}
-                  className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs px-2.5 py-2 rounded-xl font-medium shrink-0 flex items-center gap-1 transition shadow-sm font-mono"
-                  title="Search OpenProject Server directly and store result locally"
-                >
-                  <Globe className={`w-3.5 h-3.5 ${isSearchingRemote ? 'animate-spin' : ''}`} />
-                  <span>{isSearchingRemote ? '...' : extractTicketIdFromUrlOrText(searchQuery) ? `#${extractTicketIdFromUrlOrText(searchQuery)}` : 'Search OP'}</span>
-                </button>
-              )}
-
               {/* Slide Filter Drawer Trigger */}
               <button 
                 onClick={() => setIsFilterDrawerOpen(true)}
-                className={`p-2 rounded-xl border transition shrink-0 relative ${
+                className={`p-2.5 rounded-xl border transition shrink-0 relative ${
                   activeFilterCount > 0 
                     ? 'bg-blue-600/20 text-blue-400 border-blue-500/50' 
                     : 'bg-[#0f172a] text-[#64748b] border-[#1e293b] hover:text-white'
@@ -1757,23 +1744,42 @@ export default function App() {
               </button>
             </div>
 
+            {/* Quick-Jump Card when a URL or Ticket ID is typed/pasted */}
+            {searchExtractedId && (
+              <div className="flex items-center justify-between bg-blue-500/10 border border-blue-500/20 rounded-xl px-3 py-1.5 text-xs text-blue-400 animate-in fade-in duration-150">
+                <span className="flex items-center gap-1.5 font-mono">
+                  <Globe className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                  <span>Detected Ticket <strong className="text-white font-bold">#{searchExtractedId}</strong></span>
+                </span>
+                <button
+                  onClick={() => openTicketById(searchExtractedId)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs px-2.5 py-1 rounded-lg transition font-mono shadow-sm"
+                >
+                  Open Ticket
+                </button>
+              </div>
+            )}
+
             {/* Saved Views (OpenProject Views & Favorites Bar) */}
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
               
               {/* Favorite Views Chips */}
               {favoriteViews.map(view => {
                 const isActive = activeViewId === view.id;
+                const isStarredView = view.name.toLowerCase().includes('star');
                 return (
                   <button
                     key={view.id}
                     onClick={() => applySavedView(view)}
-                    className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 flex items-center gap-1.5 transition ${
+                    className={`text-xs px-3 py-1 rounded-full font-medium shrink-0 flex items-center gap-1.5 transition ${
                       isActive 
                         ? 'bg-blue-600 text-white shadow-sm' 
                         : 'bg-[#0f172a] text-[#94a3b8] border border-[#1e293b] hover:border-slate-700'
                     }`}
                   >
-                    <Star className="w-3 h-3 text-amber-400 fill-current" />
+                    {isStarredView && (
+                      <Star className="w-3 h-3 text-amber-400 fill-current" />
+                    )}
                     <span>{view.name}</span>
                   </button>
                 );
