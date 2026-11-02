@@ -8,17 +8,18 @@ import {
   Clock, 
   X, 
   Clipboard, 
-  FolderKanban,
-  Star,
-  Filter,
-  User,
-  SlidersHorizontal,
-  Globe,
-  Bookmark,
-  Trash2,
-  Plus,
-  ChevronDown,
-  ArrowUpDown
+  FolderKanban, 
+  Star, 
+  Filter, 
+  User, 
+  SlidersHorizontal, 
+  Globe, 
+  Bookmark, 
+  Trash2, 
+  Plus, 
+  ChevronDown, 
+  ArrowUpDown,
+  Check
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -85,6 +86,22 @@ export default function App() {
   const [filterPriority, setFilterPriority] = useState<string>('');
   const [filterStarredOnly, setFilterStarredOnly] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority'>('updated_desc');
+
+  // Search states for pickers & tabs
+  const [effortSearchQuery, setEffortSearchQuery] = useState('');
+  const [viewSearchQuery, setViewSearchQuery] = useState('');
+
+  // Searchable Assignee Picker Modal in Ticket Details
+  const [isAssigneePickerOpen, setIsAssigneePickerOpen] = useState(false);
+  const [assigneePickerSearch, setAssigneePickerSearch] = useState('');
+
+  // Searchable Project Picker Modal in Filter Drawer
+  const [isProjectPickerOpen, setIsProjectPickerOpen] = useState(false);
+  const [projectPickerSearch, setProjectPickerSearch] = useState('');
+
+  // Searchable Assignee Picker Modal in Filter Drawer
+  const [isDrawerAssigneePickerOpen, setIsDrawerAssigneePickerOpen] = useState(false);
+  const [drawerAssigneePickerSearch, setDrawerAssigneePickerSearch] = useState('');
 
   // Saved Views State (OpenProject Views feature)
   const [savedViews, setSavedViews] = useState<SavedView[]>(DEFAULT_SAVED_VIEWS);
@@ -422,15 +439,12 @@ export default function App() {
   // Lookup projectId by project name or ID
   const resolveProjectId = useCallback((projIdentOrName?: string): string | undefined => {
     if (!projIdentOrName) return undefined;
-    // Check if directly a known project ID
     const foundById = projectsList.find(p => String(p.id) === projIdentOrName);
     if (foundById) return String(foundById.id);
 
-    // Check by name
     const foundByName = projectsList.find(p => p.name.toLowerCase() === projIdentOrName.toLowerCase());
     if (foundByName) return String(foundByName.id);
 
-    // Check in tickets
     const ticketMatch = tickets.find(t => t.project === projIdentOrName && t.projectId);
     if (ticketMatch) return ticketMatch.projectId;
 
@@ -438,7 +452,6 @@ export default function App() {
   }, [projectsList, tickets]);
 
   // --- Project-Specific Assignees Resolver ---
-  // Returns ONLY assignees associated with that project!
   const getAssigneesForProject = useCallback((projIdentOrName?: string): LookupItem[] => {
     if (!projIdentOrName) return [];
 
@@ -513,12 +526,18 @@ export default function App() {
     return list;
   }, [selectedTicket, getAssigneesForProject]);
 
+  // Search filter for Assignee Picker Modal in Ticket Details
+  const filteredAssigneePickerList = useMemo(() => {
+    const q = assigneePickerSearch.toLowerCase().trim();
+    if (!q) return selectedTicketProjectAssignees;
+    return selectedTicketProjectAssignees.filter(u => u.name.toLowerCase().includes(q));
+  }, [selectedTicketProjectAssignees, assigneePickerSearch]);
+
   // Assignees strictly associated with the currently filtered project in drawer
   const filterDrawerAssignees = useMemo(() => {
     if (filterProject) {
       return getAssigneesForProject(filterProject);
     }
-    // If no project selected, collect assignees across all current tickets
     const map = new Map<string, string>();
     tickets.forEach(t => {
       if (t.assigneeId && t.assignee && t.assignee.toLowerCase() !== 'unassigned') {
@@ -527,6 +546,27 @@ export default function App() {
     });
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [filterProject, getAssigneesForProject, tickets]);
+
+  // Search filter for Project Picker in Filter Drawer
+  const filteredProjectPickerList = useMemo(() => {
+    const q = projectPickerSearch.toLowerCase().trim();
+    if (!q) return uniqueProjects;
+    return uniqueProjects.filter(p => p.name.toLowerCase().includes(q));
+  }, [uniqueProjects, projectPickerSearch]);
+
+  // Search filter for Assignee Picker in Filter Drawer
+  const filteredDrawerAssigneeList = useMemo(() => {
+    const q = drawerAssigneePickerSearch.toLowerCase().trim();
+    if (!q) return filterDrawerAssignees;
+    return filterDrawerAssignees.filter(u => u.name.toLowerCase().includes(q));
+  }, [filterDrawerAssignees, drawerAssigneePickerSearch]);
+
+  // Search filter for Saved Views menu
+  const filteredSavedViews = useMemo(() => {
+    const q = viewSearchQuery.toLowerCase().trim();
+    if (!q) return savedViews;
+    return savedViews.filter(v => v.name.toLowerCase().includes(q));
+  }, [savedViews, viewSearchQuery]);
 
   // --- Saved Views Activation & Application ---
   const applySavedView = (view: SavedView) => {
@@ -596,12 +636,13 @@ export default function App() {
     const q = searchQuery.toLowerCase().trim();
 
     const result = tickets.filter(t => {
-      // 1. Text Search Query
+      // 1. Text Search Query (checks ID, Subject, Project, Assignee, AND Description/Body)
       if (q) {
         const matchQuery = String(t.id).includes(q) || 
           t.subject.toLowerCase().includes(q) || 
           t.project.toLowerCase().includes(q) ||
-          t.assignee.toLowerCase().includes(q);
+          t.assignee.toLowerCase().includes(q) ||
+          (t.description && t.description.toLowerCase().includes(q));
         if (!matchQuery) return false;
       }
 
@@ -646,7 +687,6 @@ export default function App() {
         } else if (filterAssignee === 'unassigned') {
           if (t.assignee && t.assignee.toLowerCase() !== 'unassigned') return false;
         } else {
-          // Specific Assignee ID or Name
           if (t.assigneeId !== filterAssignee && t.assignee !== filterAssignee) {
             return false;
           }
@@ -663,7 +703,6 @@ export default function App() {
 
     // Sort order
     result.sort((a, b) => {
-      // Starred always pinned at top
       if (a.starred && !b.starred) return -1;
       if (!a.starred && b.starred) return 1;
 
@@ -719,7 +758,7 @@ export default function App() {
     return savedViews.filter(v => v.isFavorite);
   }, [savedViews]);
 
-  // --- Efforts Calculations ---
+  // --- Efforts Calculations & Global Effort Search ---
   const weekDays = useMemo(() => getWeekDays(), []);
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -741,6 +780,18 @@ export default function App() {
   const effortsForSelectedDate = useMemo(() => {
     return allEfforts.filter(e => e.spentOn === selectedEffortDate);
   }, [allEfforts, selectedEffortDate]);
+
+  // Global search across all efforts (subject, comment, #ID, date)
+  const searchedEfforts = useMemo(() => {
+    const q = effortSearchQuery.toLowerCase().trim();
+    if (!q) return null;
+    return allEfforts.filter(e => 
+      String(e.workPackageId).includes(q) ||
+      (e.ticketSubject && e.ticketSubject.toLowerCase().includes(q)) ||
+      (e.comment && e.comment.toLowerCase().includes(q)) ||
+      (e.spentOn && e.spentOn.includes(q))
+    );
+  }, [allEfforts, effortSearchQuery]);
 
   const pendingCount = useMemo(() => {
     return tickets.filter(t => t.pendingSync).length;
@@ -853,7 +904,7 @@ export default function App() {
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') handleRemoteSearch(); }}
-                  placeholder="Search #ID or subject..."
+                  placeholder="Search #ID, subject, assignee, or details..."
                   className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-14 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b] transition"
                 />
                 
@@ -940,7 +991,10 @@ export default function App() {
               {/* All Views Menu Dropdown Trigger */}
               <div className="relative shrink-0">
                 <button
-                  onClick={() => setIsViewsMenuOpen(!isViewsMenuOpen)}
+                  onClick={() => {
+                    setIsViewsMenuOpen(!isViewsMenuOpen);
+                    setViewSearchQuery('');
+                  }}
                   className="text-xs px-2.5 py-1 rounded-full font-medium shrink-0 flex items-center gap-1 bg-[#0f172a] text-[#94a3b8] border border-[#1e293b] hover:text-white transition"
                 >
                   <Bookmark className="w-3 h-3 text-blue-400" />
@@ -948,16 +1002,34 @@ export default function App() {
                   <ChevronDown className="w-3 h-3" />
                 </button>
 
-                {/* Dropdown Menu for All Views */}
+                {/* Dropdown Menu for All Views with Instant View Search */}
                 {isViewsMenuOpen && (
-                  <div className="absolute top-8 left-0 z-50 w-56 bg-[#0f172a] border border-[#1e293b] rounded-2xl shadow-2xl p-1.5 space-y-1 animate-in fade-in zoom-in-95">
-                    <div className="px-2 py-1 text-[10px] font-mono uppercase text-[#64748b] flex justify-between items-center">
-                      <span>Saved Views</span>
+                  <div className="absolute top-8 left-0 z-50 w-60 bg-[#0f172a] border border-[#1e293b] rounded-2xl shadow-2xl p-2 space-y-1.5 animate-in fade-in zoom-in-95">
+                    {/* View Search Input */}
+                    <div className="relative">
+                      <Search className="w-3 h-3 absolute left-2.5 top-2 text-[#64748b]" />
+                      <input
+                        type="text"
+                        autoFocus
+                        value={viewSearchQuery}
+                        onChange={e => setViewSearchQuery(e.target.value)}
+                        placeholder="Search views..."
+                        className="w-full bg-[#090d16] text-[11px] text-[#f1f5f9] rounded-lg pl-7 pr-6 py-1 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                      />
+                      {viewSearchQuery && (
+                        <button onClick={() => setViewSearchQuery('')} className="absolute right-1.5 top-1 text-[#64748b] hover:text-white p-0.5">
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="px-1 text-[10px] font-mono uppercase text-[#64748b] flex justify-between items-center">
+                      <span>Saved Views ({filteredSavedViews.length})</span>
                       <span>Favorite</span>
                     </div>
 
                     <div className="max-h-60 overflow-y-auto space-y-0.5">
-                      {savedViews.map(v => (
+                      {filteredSavedViews.map(v => (
                         <div
                           key={v.id}
                           className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition cursor-pointer ${
@@ -989,6 +1061,12 @@ export default function App() {
                           </div>
                         </div>
                       ))}
+
+                      {filteredSavedViews.length === 0 && (
+                        <div className="p-3 text-center text-[11px] text-[#64748b]">
+                          No views found
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1048,10 +1126,10 @@ export default function App() {
 
             {/* Tickets Count Header & Sort/Filter Summary */}
             <div className="px-3.5 py-2 bg-[#090d16]/80 flex items-center justify-between text-xs text-[#64748b]">
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 truncate pr-2">
                 <span>Showing <strong>{filteredTickets.length}</strong> ticket(s)</span>
                 {activeViewObj && (
-                  <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-slate-300">
+                  <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-slate-300 truncate">
                     {activeViewObj.name}
                   </span>
                 )}
@@ -1060,7 +1138,7 @@ export default function App() {
               {/* Quick Sort Toggle */}
               <button 
                 onClick={() => setSortBy(prev => prev === 'updated_desc' ? 'id_desc' : prev === 'id_desc' ? 'updated_asc' : 'updated_desc')}
-                className="flex items-center gap-1 hover:text-white transition font-mono text-[11px]"
+                className="flex items-center gap-1 hover:text-white transition font-mono text-[11px] shrink-0"
                 title="Toggle sort order"
               >
                 <ArrowUpDown className="w-3 h-3" />
@@ -1072,7 +1150,7 @@ export default function App() {
             {filteredTickets.length === 0 ? (
               <div className="p-8 text-center space-y-3">
                 <FolderKanban className="w-8 h-8 text-[#64748b] mx-auto opacity-50" />
-                <p className="text-xs text-[#64748b]">No tickets match your filters.</p>
+                <p className="text-xs text-[#64748b]">No tickets match your search or filters.</p>
                 <div className="flex justify-center gap-2">
                   <button 
                     onClick={() => {
@@ -1174,103 +1252,188 @@ export default function App() {
           </main>
         )}
 
-        {/* Tab 2: Daily & Weekly Efforts Dashboard */}
+        {/* Tab 2: Daily & Weekly Efforts Dashboard with Effort Search */}
         {activeTab === 'efforts' && (
           <main className="flex-1 overflow-y-auto p-4 space-y-4">
             
-            {/* Weekly Header Summary Card */}
-            <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-4 flex items-center justify-between">
-              <div>
-                <span className="text-xs font-mono uppercase text-[#64748b] block mb-1">Weekly Effort Total</span>
-                <span className="text-2xl font-mono font-bold text-emerald-400">
-                  {weeklyTotalHours.toFixed(1)} <span className="text-xs text-[#64748b] font-normal">hours</span>
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-xs font-mono uppercase text-[#64748b] block mb-1">Today</span>
-                <span className="text-lg font-mono font-semibold text-[#f1f5f9]">
-                  {todayTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b]">/ 8h</span>
-                </span>
-              </div>
-            </div>
-
-            {/* 7-Day Interactive Strip */}
-            <div>
-              <span className="text-xs font-mono uppercase text-[#64748b] block mb-2">Past 7 Days</span>
-              <div className="grid grid-cols-7 gap-1.5">
-                {weekDays.map(d => {
-                  const hours = hoursPerDateMap[d.dateStr] || 0;
-                  const isSelected = d.dateStr === selectedEffortDate;
-                  return (
-                    <button
-                      key={d.dateStr}
-                      onClick={() => setSelectedEffortDate(d.dateStr)}
-                      className={`p-2 rounded-xl text-center border transition flex flex-col justify-between items-center ${
-                        isSelected 
-                          ? 'bg-blue-600/20 border-blue-500 text-white' 
-                          : 'bg-[#090d16] border-[#1e293b] text-[#64748b] hover:text-white'
-                      }`}
-                    >
-                      <span className="text-[10px] uppercase font-mono block">{d.dayName}</span>
-                      <span className="text-xs font-bold my-1 block">{d.label.split(' ')[0]}</span>
-                      <span className={`text-[10px] font-mono font-semibold ${hours > 0 ? 'text-emerald-400' : 'text-[#64748b]'}`}>
-                        {hours > 0 ? `${hours.toFixed(1)}h` : '-'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Day's Effort Logs List */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono uppercase text-[#64748b]">
-                  Logs for {selectedEffortDate === todayStr ? 'Today' : selectedEffortDate}
-                </span>
-                <span className="text-xs font-mono text-emerald-400 font-bold">
-                  {(hoursPerDateMap[selectedEffortDate] || 0).toFixed(1)}h Total
-                </span>
-              </div>
-
-              {effortsForSelectedDate.length === 0 ? (
-                <div className="p-6 bg-[#090d16] border border-[#1e293b] rounded-2xl text-center">
-                  <p className="text-xs text-[#64748b]">No effort logged for this date.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {effortsForSelectedDate.map(e => (
-                    <div 
-                      key={e.id}
-                      className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs"
-                    >
-                      <div className="min-w-0 flex-1 pr-3">
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          {e.workPackageId > 0 && (
-                            <span 
-                              onClick={() => setSelectedTicketId(e.workPackageId)}
-                              className="font-mono font-bold text-blue-400 hover:underline cursor-pointer"
-                            >
-                              #{e.workPackageId}
-                            </span>
-                          )}
-                          {e.ticketSubject && (
-                            <span className="text-[#f1f5f9] truncate font-medium">{e.ticketSubject}</span>
-                          )}
-                        </div>
-                        <span className="text-[#64748b] block truncate">{e.comment || 'Effort entry'}</span>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
-                        {e.pendingSync && (
-                          <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+            {/* Search Input for Logged Efforts */}
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+              <input 
+                type="text"
+                value={effortSearchQuery}
+                onChange={e => setEffortSearchQuery(e.target.value)}
+                placeholder="Search logged efforts (#ID, subject, comment, date)..."
+                className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+              />
+              {effortSearchQuery && (
+                <button 
+                  onClick={() => setEffortSearchQuery('')} 
+                  className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               )}
             </div>
+
+            {/* When Effort Search Query is Active: Display Searched Results */}
+            {searchedEfforts !== null ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-[#64748b]">
+                  <span>Found <strong>{searchedEfforts.length}</strong> effort log(s)</span>
+                  <button 
+                    onClick={() => setEffortSearchQuery('')}
+                    className="text-blue-400 hover:underline"
+                  >
+                    Clear Search
+                  </button>
+                </div>
+
+                {searchedEfforts.length === 0 ? (
+                  <div className="p-8 bg-[#090d16] border border-[#1e293b] rounded-2xl text-center">
+                    <p className="text-xs text-[#64748b]">No logged efforts match "{effortSearchQuery}".</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {searchedEfforts.map(e => (
+                      <div 
+                        key={e.id}
+                        className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs"
+                      >
+                        <div className="min-w-0 flex-1 pr-3">
+                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                            <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-[#1e293b] text-slate-300">
+                              {e.spentOn}
+                            </span>
+                            {e.workPackageId > 0 && (
+                              <span 
+                                onClick={() => {
+                                  setSelectedTicketId(e.workPackageId);
+                                  setActiveTab('tickets');
+                                }}
+                                className="font-mono font-bold text-blue-400 hover:underline cursor-pointer"
+                              >
+                                #{e.workPackageId}
+                              </span>
+                            )}
+                            {e.ticketSubject && (
+                              <span className="text-[#f1f5f9] truncate font-medium">{e.ticketSubject}</span>
+                            )}
+                          </div>
+                          <span className="text-[#64748b] block truncate">{e.comment || 'Effort entry'}</span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
+                          {e.pendingSync && (
+                            <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Normal Efforts View: Summary + 7-Day Strip + Selected Date Logs */
+              <>
+                {/* Weekly Header Summary Card */}
+                <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-4 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-mono uppercase text-[#64748b] block mb-1">Weekly Effort Total</span>
+                    <span className="text-2xl font-mono font-bold text-emerald-400">
+                      {weeklyTotalHours.toFixed(1)} <span className="text-xs text-[#64748b] font-normal">hours</span>
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xs font-mono uppercase text-[#64748b] block mb-1">Today</span>
+                    <span className="text-lg font-mono font-semibold text-[#f1f5f9]">
+                      {todayTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b]">/ 8h</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* 7-Day Interactive Strip */}
+                <div>
+                  <span className="text-xs font-mono uppercase text-[#64748b] block mb-2">Past 7 Days</span>
+                  <div className="grid grid-cols-7 gap-1.5">
+                    {weekDays.map(d => {
+                      const hours = hoursPerDateMap[d.dateStr] || 0;
+                      const isSelected = d.dateStr === selectedEffortDate;
+                      return (
+                        <button
+                          key={d.dateStr}
+                          onClick={() => setSelectedEffortDate(d.dateStr)}
+                          className={`p-2 rounded-xl text-center border transition flex flex-col justify-between items-center ${
+                            isSelected 
+                              ? 'bg-blue-600/20 border-blue-500 text-white' 
+                              : 'bg-[#090d16] border-[#1e293b] text-[#64748b] hover:text-white'
+                          }`}
+                        >
+                          <span className="text-[10px] uppercase font-mono block">{d.dayName}</span>
+                          <span className="text-xs font-bold my-1 block">{d.label.split(' ')[0]}</span>
+                          <span className={`text-[10px] font-mono font-semibold ${hours > 0 ? 'text-emerald-400' : 'text-[#64748b]'}`}>
+                            {hours > 0 ? `${hours.toFixed(1)}h` : '-'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Day's Effort Logs List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-mono uppercase text-[#64748b]">
+                      Logs for {selectedEffortDate === todayStr ? 'Today' : selectedEffortDate}
+                    </span>
+                    <span className="text-xs font-mono text-emerald-400 font-bold">
+                      {(hoursPerDateMap[selectedEffortDate] || 0).toFixed(1)}h Total
+                    </span>
+                  </div>
+
+                  {effortsForSelectedDate.length === 0 ? (
+                    <div className="p-6 bg-[#090d16] border border-[#1e293b] rounded-2xl text-center">
+                      <p className="text-xs text-[#64748b]">No effort logged for this date.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {effortsForSelectedDate.map(e => (
+                        <div 
+                          key={e.id}
+                          className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-center justify-between text-xs"
+                        >
+                          <div className="min-w-0 flex-1 pr-3">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              {e.workPackageId > 0 && (
+                                <span 
+                                  onClick={() => {
+                                    setSelectedTicketId(e.workPackageId);
+                                    setActiveTab('tickets');
+                                  }}
+                                  className="font-mono font-bold text-blue-400 hover:underline cursor-pointer"
+                                >
+                                  #{e.workPackageId}
+                                </span>
+                              )}
+                              {e.ticketSubject && (
+                                <span className="text-[#f1f5f9] truncate font-medium">{e.ticketSubject}</span>
+                              )}
+                            </div>
+                            <span className="text-[#64748b] block truncate">{e.comment || 'Effort entry'}</span>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="font-mono font-bold text-emerald-400 text-sm">+{e.hours.toFixed(1)}h</span>
+                            {e.pendingSync && (
+                              <span className="block font-mono text-[9px] text-amber-400 uppercase">UNSYNCED</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </main>
         )}
 
@@ -1337,29 +1500,29 @@ export default function App() {
               {/* Drawer Body (OpenProject Filters) */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 
-                {/* 1. Project Filter (Narrows Assignees to this project!) */}
+                {/* 1. Project Filter with Searchable Modal Trigger */}
                 <div>
-                  <label className="block text-[11px] font-mono uppercase text-[#64748b] mb-1.5">Project</label>
-                  <select
-                    value={filterProject}
-                    onChange={e => {
-                      const val = e.target.value;
-                      setFilterProject(val);
-                      // Reset assignee if it is not in the new project's assignees
-                      if (val && filterAssignee && filterAssignee !== 'me' && filterAssignee !== 'unassigned') {
-                        const newAssignees = getAssigneesForProject(val);
-                        if (!newAssignees.some(u => u.id === filterAssignee)) {
-                          setFilterAssignee('');
-                        }
-                      }
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-mono uppercase text-[#64748b]">Project</label>
+                    <span className="text-[10px] font-mono text-[#64748b]">{uniqueProjects.length} projects</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProjectPickerSearch('');
+                      setIsProjectPickerOpen(true);
                     }}
-                    className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500 font-medium"
+                    className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] hover:border-blue-500/50 rounded-xl p-2.5 flex items-center justify-between transition group font-medium"
                   >
-                    <option value="">All Projects</option>
-                    {uniqueProjects.map(p => (
-                      <option key={p.id} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
+                    <div className="flex items-center gap-2 truncate">
+                      <FolderKanban className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span className="truncate">{filterProject || 'All Projects'}</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-[#64748b] group-hover:text-blue-400 shrink-0">
+                      <span className="text-[10px] font-mono uppercase">Search</span>
+                      <Search className="w-3 h-3" />
+                    </div>
+                  </button>
                 </div>
 
                 {/* 2. Status Category (Open vs Closed in OP) */}
@@ -1417,7 +1580,7 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* 4. Assignee Filter (STRICTLY ASSOCIATED WITH SELECTED PROJECT) */}
+                {/* 4. Assignee Filter with Searchable Modal Trigger */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="block text-[11px] font-mono uppercase text-[#64748b]">
@@ -1427,18 +1590,29 @@ export default function App() {
                       {filterProject ? `${filterDrawerAssignees.length} project member(s)` : 'All members'}
                     </span>
                   </div>
-                  <select
-                    value={filterAssignee}
-                    onChange={e => setFilterAssignee(e.target.value)}
-                    className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawerAssigneePickerSearch('');
+                      setIsDrawerAssigneePickerOpen(true);
+                    }}
+                    className="w-full bg-[#090d16] text-xs text-[#f1f5f9] border border-[#1e293b] hover:border-blue-500/50 rounded-xl p-2.5 flex items-center justify-between transition group font-medium"
                   >
-                    <option value="">All Assignees</option>
-                    <option value="me">Assigned to Me ({currentUser.name})</option>
-                    <option value="unassigned">Unassigned</option>
-                    {filterDrawerAssignees.map(u => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
-                    ))}
-                  </select>
+                    <div className="flex items-center gap-2 truncate">
+                      <User className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span className="truncate">
+                        {filterAssignee === 'me'
+                          ? `Assigned to Me (${currentUser.name})`
+                          : filterAssignee === 'unassigned'
+                          ? 'Unassigned'
+                          : filterDrawerAssignees.find(u => u.id === filterAssignee)?.name || 'All Assignees'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 text-[#64748b] group-hover:text-blue-400 shrink-0">
+                      <span className="text-[10px] font-mono uppercase">Search</span>
+                      <Search className="w-3 h-3" />
+                    </div>
+                  </button>
                 </div>
 
                 {/* 5. Type Filter */}
@@ -1522,6 +1696,240 @@ export default function App() {
                 >
                   Apply Filters
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Searchable Project Picker Modal (Filter Drawer) */}
+        {isProjectPickerOpen && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            onClick={() => setIsProjectPickerOpen(false)}
+          >
+            <div 
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Select Project</h3>
+                  <span className="text-[11px] text-[#64748b]">{uniqueProjects.length} available project(s)</span>
+                </div>
+                <button onClick={() => setIsProjectPickerOpen(false)} className="p-1 text-[#64748b] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 border-b border-[#1e293b] shrink-0 bg-[#090d16]/60">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                  <input
+                    type="text"
+                    autoFocus
+                    value={projectPickerSearch}
+                    onChange={e => setProjectPickerSearch(e.target.value)}
+                    placeholder="Search project name..."
+                    className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                  />
+                  {projectPickerSearch && (
+                    <button onClick={() => setProjectPickerSearch('')} className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto divide-y divide-[#1e293b]/50 p-1">
+                {/* All Projects Option */}
+                {(!projectPickerSearch || 'all projects'.includes(projectPickerSearch.toLowerCase())) && (
+                  <button
+                    onClick={() => {
+                      setFilterProject('');
+                      setIsProjectPickerOpen(false);
+                    }}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                      !filterProject ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <FolderKanban className="w-4 h-4 text-blue-400" />
+                      <span>All Projects</span>
+                    </div>
+                    {!filterProject && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+                )}
+
+                {/* Filtered Project List */}
+                {filteredProjectPickerList.map(p => {
+                  const isSelected = filterProject === p.name;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => {
+                        setFilterProject(p.name);
+                        if (filterAssignee && filterAssignee !== 'me' && filterAssignee !== 'unassigned') {
+                          const newAssignees = getAssigneesForProject(p.name);
+                          if (!newAssignees.some(u => u.id === filterAssignee)) {
+                            setFilterAssignee('');
+                          }
+                        }
+                        setIsProjectPickerOpen(false);
+                      }}
+                      className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                        isSelected ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <FolderKanban className="w-4 h-4 text-slate-400 shrink-0" />
+                        <span className="truncate">{p.name}</span>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+
+                {filteredProjectPickerList.length === 0 && projectPickerSearch && (
+                  <div className="p-6 text-center text-xs text-[#64748b]">
+                    No projects matching "{projectPickerSearch}"
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Searchable Assignee Picker Modal (Filter Drawer) */}
+        {isDrawerAssigneePickerOpen && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            onClick={() => setIsDrawerAssigneePickerOpen(false)}
+          >
+            <div 
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Filter by Assignee</h3>
+                  <span className="text-[11px] text-[#64748b]">
+                    {filterProject ? `Members in ${filterProject}` : `All members`} ({filterDrawerAssignees.length})
+                  </span>
+                </div>
+                <button onClick={() => setIsDrawerAssigneePickerOpen(false)} className="p-1 text-[#64748b] hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 border-b border-[#1e293b] shrink-0 bg-[#090d16]/60">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                  <input
+                    type="text"
+                    autoFocus
+                    value={drawerAssigneePickerSearch}
+                    onChange={e => setDrawerAssigneePickerSearch(e.target.value)}
+                    placeholder="Search assignee..."
+                    className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                  />
+                  {drawerAssigneePickerSearch && (
+                    <button onClick={() => setDrawerAssigneePickerSearch('')} className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto divide-y divide-[#1e293b]/50 p-1">
+                {/* Option 1: All Assignees */}
+                {(!drawerAssigneePickerSearch || 'all assignees'.includes(drawerAssigneePickerSearch.toLowerCase())) && (
+                  <button
+                    onClick={() => {
+                      setFilterAssignee('');
+                      setIsDrawerAssigneePickerOpen(false);
+                    }}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                      !filterAssignee ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                    }`}
+                  >
+                    <span>All Assignees</span>
+                    {!filterAssignee && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+                )}
+
+                {/* Option 2: Assigned to Me */}
+                {(!drawerAssigneePickerSearch || 'me'.includes(drawerAssigneePickerSearch.toLowerCase()) || currentUser.name.toLowerCase().includes(drawerAssigneePickerSearch.toLowerCase())) && (
+                  <button
+                    onClick={() => {
+                      setFilterAssignee('me');
+                      setIsDrawerAssigneePickerOpen(false);
+                    }}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                      filterAssignee === 'me' ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-xs">
+                        ME
+                      </div>
+                      <span>Assigned to Me ({currentUser.name})</span>
+                    </div>
+                    {filterAssignee === 'me' && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+                )}
+
+                {/* Option 3: Unassigned */}
+                {(!drawerAssigneePickerSearch || 'unassigned'.includes(drawerAssigneePickerSearch.toLowerCase())) && (
+                  <button
+                    onClick={() => {
+                      setFilterAssignee('unassigned');
+                      setIsDrawerAssigneePickerOpen(false);
+                    }}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                      filterAssignee === 'unassigned' ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-[#1e293b] text-[#64748b] flex items-center justify-center text-xs">
+                        <User className="w-3.5 h-3.5" />
+                      </div>
+                      <span>Unassigned</span>
+                    </div>
+                    {filterAssignee === 'unassigned' && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+                )}
+
+                {/* Filtered Project Assignees */}
+                {filteredDrawerAssigneeList.map(u => {
+                  const isSelected = filterAssignee === u.id;
+                  const initials = u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+                  return (
+                    <button
+                      key={u.id}
+                      onClick={() => {
+                        setFilterAssignee(u.id);
+                        setIsDrawerAssigneePickerOpen(false);
+                      }}
+                      className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                        isSelected ? 'bg-blue-600/20 text-blue-300 font-semibold' : 'text-slate-300 hover:bg-[#1e293b]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <div className="w-7 h-7 rounded-full bg-blue-600/20 text-blue-400 font-mono text-[11px] flex items-center justify-center font-bold shrink-0">
+                          {initials}
+                        </div>
+                        <span className="truncate">{u.name}</span>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+
+                {filteredDrawerAssigneeList.length === 0 && drawerAssigneePickerSearch && (
+                  <div className="p-6 text-center text-xs text-[#64748b]">
+                    No members matching "{drawerAssigneePickerSearch}"
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1666,7 +2074,7 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Assignee Selector (STRICTLY ASSOCIATED WITH THIS TICKET'S PROJECT) */}
+              {/* Searchable Assignee Selector Modal Trigger (STRICTLY ASSOCIATED WITH THIS TICKET'S PROJECT) */}
               <div className="bg-[#090d16] border border-[#1e293b] rounded-2xl p-3.5 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono uppercase text-[#64748b] tracking-wider block">
@@ -1677,24 +2085,32 @@ export default function App() {
                     <span>{selectedTicketProjectAssignees.length} project member(s)</span>
                   </span>
                 </div>
-                <select
-                  value={selectedTicket.assigneeId || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (!val) {
-                      handleUpdateAssignee(selectedTicket, '', 'Unassigned');
-                    } else {
-                      const u = selectedTicketProjectAssignees.find(user => user.id === val);
-                      if (u) handleUpdateAssignee(selectedTicket, u.id, u.name);
-                    }
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssigneePickerSearch('');
+                    setIsAssigneePickerOpen(true);
                   }}
-                  className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] border border-[#1e293b] rounded-xl p-2.5 focus:outline-none focus:border-blue-500 cursor-pointer font-medium"
+                  className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] border border-[#1e293b] hover:border-blue-500/50 rounded-xl p-2.5 flex items-center justify-between transition group"
                 >
-                  <option value="">Unassigned</option>
-                  {selectedTicketProjectAssignees.map(u => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
-                </select>
+                  <div className="flex items-center gap-2.5 truncate">
+                    <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 font-mono text-[10px] flex items-center justify-center font-bold shrink-0">
+                      {selectedTicket.assignee && selectedTicket.assignee.toLowerCase() !== 'unassigned'
+                        ? selectedTicket.assignee.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                        : '-'}
+                    </div>
+                    <span className="font-medium truncate">
+                      {selectedTicket.assignee && selectedTicket.assignee.toLowerCase() !== 'unassigned'
+                        ? selectedTicket.assignee
+                        : 'Unassigned'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[#64748b] group-hover:text-blue-400 shrink-0">
+                    <span className="text-[10px] font-mono uppercase">Change</span>
+                    <Search className="w-3.5 h-3.5" />
+                  </div>
+                </button>
               </div>
 
               {/* Ticket Details (Markdown Description with Click-to-Zoom Images) */}
@@ -1794,6 +2210,119 @@ export default function App() {
                 </div>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* Searchable Assignee Picker Modal (for Ticket Reassignment) */}
+        {isAssigneePickerOpen && selectedTicket && (
+          <div 
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col justify-end sm:justify-center sm:p-4 animate-in fade-in duration-150"
+            onClick={() => setIsAssigneePickerOpen(false)}
+          >
+            <div 
+              className="bg-[#0f172a] border border-[#1e293b] rounded-t-3xl sm:rounded-2xl max-h-[85vh] sm:max-h-[600px] flex flex-col shadow-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
+                <div>
+                  <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Assign Ticket #{selectedTicket.id}</h3>
+                  <span className="text-[11px] text-[#64748b]">
+                    {selectedTicket.project} ({selectedTicketProjectAssignees.length} members)
+                  </span>
+                </div>
+                <button 
+                  onClick={() => setIsAssigneePickerOpen(false)} 
+                  className="p-1 text-[#64748b] hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Search Field */}
+              <div className="p-3 border-b border-[#1e293b] shrink-0 bg-[#090d16]/60">
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-[#64748b]" />
+                  <input
+                    type="text"
+                    autoFocus
+                    value={assigneePickerSearch}
+                    onChange={e => setAssigneePickerSearch(e.target.value)}
+                    placeholder="Search member by name..."
+                    className="w-full bg-[#0f172a] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
+                  />
+                  {assigneePickerSearch && (
+                    <button 
+                      onClick={() => setAssigneePickerSearch('')}
+                      className="absolute right-2.5 top-2 text-[#64748b] hover:text-white p-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Filtered Members List */}
+              <div className="flex-1 overflow-y-auto divide-y divide-[#1e293b]/50 p-1">
+                {/* Unassigned Option */}
+                {(!assigneePickerSearch || 'unassigned'.includes(assigneePickerSearch.toLowerCase())) && (
+                  <button
+                    onClick={() => {
+                      handleUpdateAssignee(selectedTicket, '', 'Unassigned');
+                      setIsAssigneePickerOpen(false);
+                    }}
+                    className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                      !selectedTicket.assigneeId || selectedTicket.assignee.toLowerCase() === 'unassigned'
+                        ? 'bg-blue-600/20 text-blue-300 font-semibold'
+                        : 'text-slate-300 hover:bg-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-[#1e293b] text-[#64748b] flex items-center justify-center text-xs">
+                        <User className="w-3.5 h-3.5" />
+                      </div>
+                      <span>Unassigned</span>
+                    </div>
+                    {(!selectedTicket.assigneeId || selectedTicket.assignee.toLowerCase() === 'unassigned') && (
+                      <Check className="w-4 h-4 text-blue-400" />
+                    )}
+                  </button>
+                )}
+
+                {/* Filtered Project Members */}
+                {filteredAssigneePickerList.map(u => {
+                  const isSelected = selectedTicket.assigneeId === u.id;
+                  const initials = u.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+                  return (
+                    <button
+                      key={u.id}
+                      onClick={() => {
+                        handleUpdateAssignee(selectedTicket, u.id, u.name);
+                        setIsAssigneePickerOpen(false);
+                      }}
+                      className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left text-xs transition ${
+                        isSelected 
+                          ? 'bg-blue-600/20 text-blue-300 font-semibold' 
+                          : 'text-slate-300 hover:bg-[#1e293b]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <div className="w-7 h-7 rounded-full bg-blue-600/20 text-blue-400 font-mono text-[11px] flex items-center justify-center font-bold shrink-0">
+                          {initials}
+                        </div>
+                        <span className="truncate">{u.name}</span>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-blue-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+
+                {filteredAssigneePickerList.length === 0 && assigneePickerSearch && (
+                  <div className="p-6 text-center text-xs text-[#64748b]">
+                    No project members matching "{assigneePickerSearch}"
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
