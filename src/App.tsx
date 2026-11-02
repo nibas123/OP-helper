@@ -22,7 +22,9 @@ import {
   Check,
   Loader2,
   AlertCircle,
-  Pencil
+  Pencil,
+  UploadCloud,
+  DownloadCloud
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -36,6 +38,7 @@ import {
   DEFAULT_SAVED_VIEWS 
 } from './services/db';
 import { syncService, parseDurationToHours } from './services/syncService';
+import { sheetSyncService } from './services/sheetSyncService';
 import { OpenProjectService } from './services/OpenProjectService';
 import { extractTicketIdFromUrlOrText } from './utils/urlParser';
 import { DEFAULT_STATUSES, DEFAULT_TYPES, DEFAULT_PRIORITIES } from './constants/opDefaults';
@@ -207,6 +210,12 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRefreshingPWA, setIsRefreshingPWA] = useState(false);
 
+  // Google Sheet Database & Dual-Sync States
+  const [opSheetUrl, setOpSheetUrl] = useState('');
+  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
+  const [isRestoringSheet, setIsRestoringSheet] = useState(false);
+  const [sheetLastSyncTime, setSheetLastSyncTime] = useState('');
+
   // Selected ticket effort history & live fetch
   const [ticketEffortsList, setTicketEffortsList] = useState<{
     id: string;
@@ -362,6 +371,25 @@ export default function App() {
       } else {
         setLastSyncText('Local DB');
       }
+
+      // If local cache was completely cleared (zero tickets) but Google Sheet is configured,
+      // auto-fetch and restore all static and dynamic data from the sheet!
+      const sheetUrl = sheetSyncService.getSheetUrl();
+      if (allTickets.length === 0 && sheetUrl) {
+        sheetSyncService.restoreFromSheet().then((res) => {
+          if (res.success && res.data) {
+            if (res.data.tickets && res.data.tickets.length > 0) setTickets(res.data.tickets);
+            if (res.data.projects && res.data.projects.length > 0) setProjectsList(res.data.projects);
+            if (res.data.statuses && res.data.statuses.length > 0) setStatuses(res.data.statuses);
+            if (res.data.types && res.data.types.length > 0) setTypes(res.data.types);
+            if (res.data.views && res.data.views.length > 0) setSavedViews(res.data.views);
+            if (res.data.efforts && res.data.efforts.length > 0) setAllEfforts(res.data.efforts);
+            if (res.data.currentUser) setCurrentUser(res.data.currentUser);
+            setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
+            showEphemeralNotice('Restored data from Google Sheet backup');
+          }
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error('[DB] Failed to load local records:', err);
     }
@@ -420,6 +448,12 @@ export default function App() {
       if (creds.url) setOpUrl(creds.url);
       if (creds.apiKey) setOpApiKey(creds.apiKey);
     });
+
+    const sheetUrl = sheetSyncService.getSheetUrl();
+    if (sheetUrl) {
+      setOpSheetUrl(sheetUrl);
+      setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
+    }
 
     const params = new URLSearchParams(window.location.search);
     const sharedUrl = params.get('url') || params.get('text') || params.get('ticket') || params.get('id');
@@ -743,6 +777,9 @@ export default function App() {
     await db.putEffort(newEffort);
     setAllEfforts(prev => [newEffort, ...prev]);
 
+    // Dual-Sync: Asynchronously record effort in Google Sheet
+    sheetSyncService.logEffortAsync(newEffort, currentUser);
+
     // If currently viewing this ticket in modal, immediately prepend to effort history
     if (selectedTicketId === targetTicketId) {
       setTicketEffortsList(prev => [
@@ -959,9 +996,78 @@ export default function App() {
   // --- Save Connection Settings ---
   const handleSaveSettings = async () => {
     await OpenProjectService.saveCredentials(opUrl, opApiKey);
+    sheetSyncService.setSheetUrl(opSheetUrl);
     setSettingsNotice('Credentials saved. Initiating sync...');
     setTimeout(() => setSettingsNotice(null), 3000);
     handleSync(true);
+  };
+
+  // --- Google Sheet Dual-Sync & Backup ---
+  const handleSyncAllToSheet = async () => {
+    const url = opSheetUrl.trim();
+    if (!url) {
+      showEphemeralNotice('Please enter a Google Sheet Web App URL');
+      return;
+    }
+    sheetSyncService.setSheetUrl(url);
+    setIsSyncingSheet(true);
+    showEphemeralNotice('Syncing all data to Google Sheet...');
+
+    try {
+      const res = await sheetSyncService.syncAllToSheet({
+        projects: projectsList,
+        statuses,
+        types,
+        views: savedViews,
+        tickets,
+        efforts: allEfforts,
+        currentUser
+      });
+
+      if (res.success) {
+        setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
+        showEphemeralNotice('Successfully synced all data to Google Sheet!');
+      } else {
+        showEphemeralNotice(res.message || 'Sheet sync failed');
+      }
+    } catch (err: any) {
+      showEphemeralNotice(err.message || 'Sheet sync error');
+    } finally {
+      setIsSyncingSheet(false);
+    }
+  };
+
+  const handleRestoreFromSheet = async () => {
+    const url = opSheetUrl.trim();
+    if (!url) {
+      showEphemeralNotice('Please enter a Google Sheet Web App URL');
+      return;
+    }
+    sheetSyncService.setSheetUrl(url);
+    setIsRestoringSheet(true);
+    showEphemeralNotice('Fetching backup from Google Sheet...');
+
+    try {
+      const res = await sheetSyncService.restoreFromSheet();
+
+      if (res.success && res.data) {
+        if (res.data.tickets && res.data.tickets.length > 0) setTickets(res.data.tickets);
+        if (res.data.projects && res.data.projects.length > 0) setProjectsList(res.data.projects);
+        if (res.data.statuses && res.data.statuses.length > 0) setStatuses(res.data.statuses);
+        if (res.data.types && res.data.types.length > 0) setTypes(res.data.types);
+        if (res.data.views && res.data.views.length > 0) setSavedViews(res.data.views);
+        if (res.data.efforts && res.data.efforts.length > 0) setAllEfforts(res.data.efforts);
+        if (res.data.currentUser) setCurrentUser(res.data.currentUser);
+        setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
+        showEphemeralNotice('Data fully restored from Google Sheet!');
+      } else {
+        showEphemeralNotice(res.message || 'Failed to restore data from Sheet');
+      }
+    } catch (err: any) {
+      showEphemeralNotice(err.message || 'Restore error');
+    } finally {
+      setIsRestoringSheet(false);
+    }
   };
 
   // --- Force Refresh PWA & Clear Cache (Updates to Latest Version) ---
@@ -1357,6 +1463,7 @@ export default function App() {
     };
 
     await db.putSavedView(newView);
+    sheetSyncService.saveViewAsync(newView);
     setSavedViews(prev => [...prev, newView]);
     setActiveViewId(newView.id);
     setIsSaveViewModalOpen(false);
@@ -3544,6 +3651,60 @@ export default function App() {
                   <Check className="w-4 h-4" />
                   <span>Save Credentials & Sync</span>
                 </button>
+
+                {/* Section Divider: Google Sheet & Excel Dual-Sync */}
+                <div className="pt-3 border-t border-[#1e293b] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-mono uppercase text-[#64748b] block">
+                      Google Sheet & Excel Dual-Sync
+                    </span>
+                    {sheetLastSyncTime && (
+                      <span className="text-[10px] font-mono text-emerald-400">
+                        Synced: {sheetLastSyncTime}
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-mono uppercase text-[#64748b] mb-1">
+                      Apps Script Web App URL
+                    </label>
+                    <input 
+                      type="url" 
+                      value={opSheetUrl}
+                      onFocus={e => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' })}
+                      onChange={e => setOpSheetUrl(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-2.5 text-xs text-[#f1f5f9] focus:outline-none focus:border-blue-500 font-mono"
+                    />
+                    <span className="text-[10px] text-[#64748b] font-mono mt-1 block">
+                      Syncs views, projects, statuses, tickets & efforts to Google Sheet / Excel. If cache is wiped, restores everything automatically.
+                    </span>
+                  </div>
+
+                  {/* Dual Sync Action Buttons */}
+                  <div className="grid grid-cols-2 gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      disabled={isSyncingSheet || !opSheetUrl}
+                      onClick={handleSyncAllToSheet}
+                      className="bg-[#090d16] hover:bg-[#1e293b] disabled:opacity-40 border border-[#1e293b] text-xs font-mono py-2.5 px-2 rounded-xl text-emerald-400 font-medium transition flex items-center justify-center gap-1.5"
+                    >
+                      <UploadCloud className={`w-3.5 h-3.5 ${isSyncingSheet ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingSheet ? 'Syncing...' : 'Backup to Sheet'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isRestoringSheet || !opSheetUrl}
+                      onClick={handleRestoreFromSheet}
+                      className="bg-[#090d16] hover:bg-[#1e293b] disabled:opacity-40 border border-[#1e293b] text-xs font-mono py-2.5 px-2 rounded-xl text-blue-400 font-medium transition flex items-center justify-center gap-1.5"
+                    >
+                      <DownloadCloud className={`w-3.5 h-3.5 ${isRestoringSheet ? 'animate-spin' : ''}`} />
+                      <span>{isRestoringSheet ? 'Restoring...' : 'Restore from Sheet'}</span>
+                    </button>
+                  </div>
+                </div>
 
                 {/* Section Divider: PWA & Cache Management */}
                 <div className="pt-3 border-t border-[#1e293b] space-y-2">
