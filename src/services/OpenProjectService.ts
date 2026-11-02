@@ -62,6 +62,13 @@ async function saveCredentials(url: string, apiKey: string): Promise<void> {
   }
 }
 
+export function isRunningInExtension(): boolean {
+  return typeof chrome !== 'undefined' &&
+    Boolean(chrome.runtime?.id) &&
+    typeof window !== 'undefined' &&
+    window.location?.protocol === 'chrome-extension:';
+}
+
 /**
  * Creates an authenticated Axios instance
  */
@@ -74,16 +81,36 @@ async function getApiClient() {
 
   const baseUrl = (url || DEFAULT_URL).trim().replace(/\/+$/, '');
   const encodedToken = btoa(`apikey:${apiKey.trim()}`);
+  const inExtension = isRunningInExtension();
 
-  return axios.create({
-    baseURL: `${baseUrl}/api/v3`,
+  const client = axios.create({
     headers: {
       'Authorization': `Basic ${encodedToken}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    timeout: 10000 // 10s timeout for mobile resilience
+    timeout: 20000 // 20s timeout for mobile resilience
   });
+
+  if (inExtension) {
+    client.defaults.baseURL = `${baseUrl}/api/v3`;
+  } else {
+    // When running as a Web App / PWA (e.g. on Vercel), route through the serverless
+    // CORS proxy /api/proxy?endpoint=... so mobile browsers do not get blocked by CORS.
+    client.interceptors.request.use((config) => {
+      let target = config.url || '';
+      if (target.startsWith('/')) {
+        target = `${baseUrl}/api/v3${target}`;
+      } else if (!target.startsWith('http://') && !target.startsWith('https://')) {
+        target = `${baseUrl}/api/v3/${target}`;
+      }
+
+      config.url = `/api/proxy?endpoint=${encodeURIComponent(target)}`;
+      return config;
+    });
+  }
+
+  return client;
 }
 
 export const OpenProjectService = {
@@ -315,7 +342,12 @@ export const OpenProjectService = {
       headers['Authorization'] = `Basic ${token}`;
     }
 
-    const response = await fetch(fullUrl, { headers });
+    let fetchUrl = fullUrl;
+    if (!isRunningInExtension()) {
+      fetchUrl = `/api/proxy?endpoint=${encodeURIComponent(fullUrl)}`;
+    }
+
+    const response = await fetch(fetchUrl, { headers });
     if (!response.ok) {
       throw new Error(`Failed to load attachment: HTTP ${response.status} ${response.statusText}`);
     }

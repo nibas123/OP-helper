@@ -1,8 +1,11 @@
-const CACHE_NAME = 'op-mobile-v1';
+const CACHE_NAME = 'op-mobile-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/favicon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png',
   '/manifest.webmanifest'
 ];
 
