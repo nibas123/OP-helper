@@ -304,6 +304,7 @@ export default function App() {
     };
   }, []);
   const [newViewFavorite, setNewViewFavorite] = useState(true);
+  const [newViewDefault, setNewViewDefault] = useState(false);
 
   // Sync state
   const [isSyncing, setIsSyncing] = useState(false);
@@ -364,6 +365,29 @@ export default function App() {
       const views = await db.getSavedViews();
       setSavedViews(views);
 
+      // Auto-activate the default view (marked as default or saved in meta)
+      const defaultMetaId = await db.getMeta<string>('defaultViewId');
+      const targetDefault = views.find(v => v.id === defaultMetaId) || views.find(v => v.isDefault) || views[0];
+      if (targetDefault) {
+        setActiveViewId(targetDefault.id);
+        const f = targetDefault.filters;
+        setFilterStatusCategory(f.statusCategory || 'all');
+        if (f.statusIds && f.statusIds.length > 0) setFilterStatuses(f.statusIds);
+        else if (f.statusId) setFilterStatuses([f.statusId]);
+        else setFilterStatuses([]);
+
+        if (f.projects && f.projects.length > 0) setFilterProjects(f.projects);
+        else if (f.project) setFilterProjects([f.project]);
+        else if (f.projectId) setFilterProjects([f.projectId]);
+        else setFilterProjects([]);
+
+        setFilterType(f.type || '');
+        setFilterAssignee(f.assignee || '');
+        setFilterPriority(f.priority || '');
+        setFilterStarredOnly(!!f.starredOnly);
+        setSortBy(f.sortBy || 'updated_desc');
+      }
+
       const efforts = await db.getAllEfforts();
       setAllEfforts(efforts);
 
@@ -385,7 +409,29 @@ export default function App() {
             if (res.data.projects && res.data.projects.length > 0) setProjectsList(res.data.projects);
             if (res.data.statuses && res.data.statuses.length > 0) setStatuses(res.data.statuses);
             if (res.data.types && res.data.types.length > 0) setTypes(res.data.types);
-            if (res.data.views && res.data.views.length > 0) setSavedViews(res.data.views);
+            if (res.data.views && res.data.views.length > 0) {
+              setSavedViews(res.data.views);
+              const sheetDefault = res.data.views.find((v: SavedView) => v.isDefault) || res.data.views[0];
+              if (sheetDefault) {
+                setActiveViewId(sheetDefault.id);
+                const f = sheetDefault.filters;
+                setFilterStatusCategory(f.statusCategory || 'all');
+                if (f.statusIds && f.statusIds.length > 0) setFilterStatuses(f.statusIds);
+                else if (f.statusId) setFilterStatuses([f.statusId]);
+                else setFilterStatuses([]);
+
+                if (f.projects && f.projects.length > 0) setFilterProjects(f.projects);
+                else if (f.project) setFilterProjects([f.project]);
+                else if (f.projectId) setFilterProjects([f.projectId]);
+                else setFilterProjects([]);
+
+                setFilterType(f.type || '');
+                setFilterAssignee(f.assignee || '');
+                setFilterPriority(f.priority || '');
+                setFilterStarredOnly(!!f.starredOnly);
+                setSortBy(f.sortBy || 'updated_desc');
+              }
+            }
             if (res.data.efforts && res.data.efforts.length > 0) setAllEfforts(res.data.efforts);
             if (res.data.currentUser) setCurrentUser(res.data.currentUser);
             setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
@@ -1532,14 +1578,27 @@ export default function App() {
     setSavedViews(prev => prev.map(v => v.id === viewId ? { ...v, isFavorite: isFav } : v));
   };
 
+  const handleSetDefaultView = async (e: React.MouseEvent, viewId: string) => {
+    e.stopPropagation();
+    await db.setDefaultSavedView(viewId);
+    setSavedViews(prev => prev.map(v => ({ ...v, isDefault: v.id === viewId })));
+    const target = savedViews.find(v => v.id === viewId);
+    if (target) {
+      sheetSyncService.saveViewAsync({ ...target, isDefault: true });
+    }
+    showEphemeralNotice(`Set "${target?.name || 'View'}" as default startup view`);
+  };
+
   const handleSaveCurrentAsNewView = async () => {
     if (!newViewName.trim()) return;
 
+    const newViewId = `view_${Date.now()}`;
     const newView: SavedView = {
-      id: `view_${Date.now()}`,
+      id: newViewId,
       name: newViewName.trim(),
-      isFavorite: newViewFavorite,
+      isFavorite: newViewFavorite || newViewDefault,
       isSystem: false,
+      isDefault: newViewDefault,
       createdAt: new Date().toISOString(),
       filters: {
         statusCategory: filterStatusCategory,
@@ -1554,12 +1613,19 @@ export default function App() {
     };
 
     await db.putSavedView(newView);
+    if (newViewDefault) {
+      await db.setDefaultSavedView(newViewId);
+    }
     sheetSyncService.saveViewAsync(newView);
-    setSavedViews(prev => [...prev, newView]);
+    setSavedViews(prev => {
+      const updated = prev.map(v => newViewDefault ? { ...v, isDefault: false } : v);
+      return [...updated, newView];
+    });
     setActiveViewId(newView.id);
     setIsSaveViewModalOpen(false);
     setNewViewName('');
-    showEphemeralNotice(`Saved view "${newView.name}"`);
+    setNewViewDefault(false);
+    showEphemeralNotice(`Saved view "${newView.name}"${newViewDefault ? ' (set as default)' : ''}`);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -1987,6 +2053,9 @@ export default function App() {
                     {isStarredView && (
                       <Star className="w-3 h-3 text-amber-400 fill-current" />
                     )}
+                    {view.isDefault && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Default startup view" />
+                    )}
                     <span>{view.name}</span>
                   </button>
                 );
@@ -2018,7 +2087,7 @@ export default function App() {
 
                 {/* Dropdown Menu for All Views with Instant View Search */}
                 {isViewsMenuOpen && (
-                  <div className="absolute top-8 left-0 z-50 w-60 bg-[#0f172a] border border-[#1e293b] rounded-2xl shadow-2xl p-2 space-y-1.5 animate-in fade-in zoom-in-95">
+                  <div className="absolute top-8 left-0 z-50 w-72 bg-[#0f172a] border border-[#1e293b] rounded-2xl shadow-2xl p-2 space-y-1.5 animate-in fade-in zoom-in-95">
                     {/* View Search Input */}
                     <div className="relative">
                       <Search className="w-3 h-3 absolute left-2.5 top-2 text-[#64748b]" />
@@ -2039,7 +2108,7 @@ export default function App() {
 
                     <div className="px-1 text-[10px] font-mono uppercase text-[#64748b] flex justify-between items-center">
                       <span>Saved Views ({filteredSavedViews.length})</span>
-                      <span>Favorite</span>
+                      <span>Default / Pin</span>
                     </div>
 
                     <div className="max-h-60 overflow-y-auto space-y-0.5">
@@ -2051,8 +2120,26 @@ export default function App() {
                           }`}
                           onClick={() => applySavedView(v)}
                         >
-                          <span className="truncate pr-2">{v.name}</span>
+                          <div className="flex items-center gap-1.5 truncate pr-2">
+                            <span className="truncate">{v.name}</span>
+                            {v.isDefault && (
+                              <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold shrink-0">
+                                DEFAULT
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={(e) => handleSetDefaultView(e, v.id)}
+                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition ${
+                                v.isDefault 
+                                  ? 'text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20' 
+                                  : 'text-[#64748b] hover:text-emerald-400 hover:bg-[#1e293b]'
+                              }`}
+                              title={v.isDefault ? 'Current default startup view' : 'Set as default startup view'}
+                            >
+                              {v.isDefault ? 'Default' : 'Make Default'}
+                            </button>
                             <button
                               onClick={(e) => handleToggleFavoriteView(e, v.id)}
                               className="p-1 hover:text-amber-400"
@@ -2143,9 +2230,24 @@ export default function App() {
               <div className="flex items-center gap-1.5 truncate pr-2">
                 <span>Showing <strong>{filteredTickets.length}</strong> ticket(s)</span>
                 {activeViewObj && (
-                  <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-slate-300 truncate">
-                    {activeViewObj.name}
-                  </span>
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-slate-300 truncate">
+                      {activeViewObj.name}
+                    </span>
+                    {activeViewObj.isDefault ? (
+                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold shrink-0">
+                        DEFAULT
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => handleSetDefaultView(e, activeViewObj.id)}
+                        className="text-[10px] font-mono text-slate-400 hover:text-emerald-400 hover:underline px-1 py-0.5 shrink-0"
+                        title="Set this view as default startup view"
+                      >
+                        Set Default
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -3700,6 +3802,22 @@ export default function App() {
                   checked={newViewFavorite}
                   onChange={e => setNewViewFavorite(e.target.checked)}
                   className="w-4 h-4 rounded border-[#1e293b] text-blue-600 focus:ring-0 cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 bg-[#090d16] border border-[#1e293b] rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Bookmark className="w-4 h-4 text-emerald-400" />
+                  <div>
+                    <span className="text-xs text-[#f1f5f9] block font-medium">Set as Default / Main View</span>
+                    <span className="text-[10px] text-[#64748b] block">Opens automatically on startup</span>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={newViewDefault}
+                  onChange={e => setNewViewDefault(e.target.checked)}
+                  className="w-4 h-4 rounded border-[#1e293b] text-emerald-600 focus:ring-0 cursor-pointer"
                 />
               </div>
 

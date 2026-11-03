@@ -561,6 +561,32 @@ class LocalDatabase {
     });
   }
 
+  async setDefaultSavedView(id: string): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['savedViews', 'meta'], 'readwrite');
+      const store = tx.objectStore('savedViews');
+      const metaStore = tx.objectStore('meta');
+
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const views = (req.result || []) as SavedView[];
+        for (const v of views) {
+          const wasDefault = !!v.isDefault;
+          const shouldBeDefault = v.id === id;
+          if (wasDefault !== shouldBeDefault) {
+            v.isDefault = shouldBeDefault;
+            store.put(v);
+          }
+        }
+        metaStore.put({ key: 'defaultViewId', value: id });
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   // --- Sync Queue ---
 
   async getSyncQueue(): Promise<SyncQueueItem[]> {
