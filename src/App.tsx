@@ -6,6 +6,7 @@ import {
   ExternalLink, 
   RefreshCw, 
   Clock, 
+  Calendar,
   X, 
   Clipboard, 
   FolderKanban, 
@@ -319,6 +320,7 @@ export default function App() {
   const [selectedEffortDate, setSelectedEffortDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [customEffortHours, setCustomEffortHours] = useState('');
   const [customEffortComment, setCustomEffortComment] = useState('');
+  const [ticketEffortDate, setTicketEffortDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Edit Existing Logged Effort Modal
   const [editingEffort, setEditingEffort] = useState<LocalEffort | null>(null);
@@ -1602,11 +1604,15 @@ export default function App() {
     const extractedId = extractTicketIdFromUrlOrText(searchQuery);
 
     const result = tickets.filter(t => {
+      // If user searched for an exact ticket ID or URL, match it directly
+      if (extractedId && t.id === extractedId) {
+        return true;
+      }
+
       // 1. Text Search Query (checks ID, Subject, Project, Assignee, AND Description/Body)
       if (q) {
         const cleanId = q.replace(/^#/, '');
         const matchQuery = 
-          (extractedId && t.id === extractedId) ||
           String(t.id).includes(cleanId) || 
           t.subject.toLowerCase().includes(q) || 
           t.project.toLowerCase().includes(q) ||
@@ -1615,64 +1621,64 @@ export default function App() {
         if (!matchQuery) return false;
       }
 
-      // If user typed a search query (ID, URL, or keyword), show all search matches across projects & assignees
-      if (q) {
-        return true;
-      }
-
       // 2. Starred Only
       if (filterStarredOnly && !t.starred) return false;
 
-      // 3. Status Category (Open vs Closed in OP)
-      if (filterStatusCategory === 'open') {
-        const isClosed = closedStatusIds.has(t.statusId) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
-        if (isClosed) return false;
-      } else if (filterStatusCategory === 'closed') {
-        const isClosed = closedStatusIds.has(t.statusId) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
-        if (!isClosed) return false;
-      }
-
-      // 4. Multiple Specific Statuses
+      // 3. Status Filtering: Specific Statuses takes priority over Category
       if (filterStatuses.length > 0) {
-        const matchStatus = filterStatuses.includes(t.statusId) || filterStatuses.some(s => s.toLowerCase() === t.status.toLowerCase());
+        const matchStatus = filterStatuses.some(s => 
+          String(t.statusId) === String(s) || 
+          t.status.toLowerCase() === s.toLowerCase()
+        );
         if (!matchStatus) return false;
+      } else {
+        // Status Category (Open vs Closed in OP)
+        if (filterStatusCategory === 'open') {
+          const isClosed = closedStatusIds.has(String(t.statusId)) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
+          if (isClosed) return false;
+        } else if (filterStatusCategory === 'closed') {
+          const isClosed = closedStatusIds.has(String(t.statusId)) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
+          if (!isClosed) return false;
+        }
       }
 
-      // 5. Multiple Projects
+      // 4. Multiple Projects Filter
       if (filterProjects.length > 0) {
         const matchProject = filterProjects.some(p => 
           t.project.toLowerCase() === p.toLowerCase() ||
-          (t.projectId && t.projectId === p) ||
-          (resolveProjectId(p) && t.projectId === resolveProjectId(p))
+          String(t.projectId) === String(p) ||
+          (resolveProjectId(p) && String(t.projectId) === String(resolveProjectId(p)))
         );
         if (!matchProject) return false;
       }
 
-      // 6. Type
-      if (filterType && t.type !== filterType && t.typeId !== filterType) {
-        return false;
+      // 5. Type Filter
+      if (filterType) {
+        const matchType = String(t.typeId) === String(filterType) || (t.type && t.type.toLowerCase() === filterType.toLowerCase());
+        if (!matchType) return false;
       }
 
-      // 7. Assignee (FIXED: strictly matches current user Nibas Nazeem or ID, never generic substring 'me' which matched Mehaboob Ali)
+      // 6. Assignee Filter
       if (filterAssignee) {
         if (filterAssignee === 'me') {
-          const isMe = (currentUser.id && String(t.assigneeId) === String(currentUser.id)) || 
+          const isMe = (currentUser?.id && String(t.assigneeId) === String(currentUser.id)) || 
                        t.assignee.toLowerCase() === 'me' || 
-                       t.assignee.toLowerCase() === currentUser.name.toLowerCase() ||
+                       (currentUser?.name && t.assignee.toLowerCase() === currentUser.name.toLowerCase()) ||
+                       (currentUser?.name && t.assignee.toLowerCase().includes(currentUser.name.toLowerCase())) ||
                        t.assignee.toLowerCase().includes('nibas');
           if (!isMe) return false;
         } else if (filterAssignee === 'unassigned') {
-          if (t.assignee && t.assignee.toLowerCase() !== 'unassigned') return false;
+          if (t.assignee && t.assignee.toLowerCase() !== 'unassigned' && t.assignee.trim() !== '') return false;
         } else {
-          if (t.assigneeId !== filterAssignee && t.assignee !== filterAssignee) {
-            return false;
-          }
+          const matchAssignee = String(t.assigneeId) === String(filterAssignee) || t.assignee.toLowerCase() === filterAssignee.toLowerCase();
+          if (!matchAssignee) return false;
         }
       }
 
-      // 8. Priority
-      if (filterPriority && t.priority.toLowerCase() !== filterPriority.toLowerCase() && t.priorityId !== filterPriority) {
-        return false;
+      // 7. Priority Filter
+      if (filterPriority) {
+        const matchPriority = String(t.priorityId) === String(filterPriority) || t.priority.toLowerCase() === filterPriority.toLowerCase();
+        if (!matchPriority) return false;
       }
 
       return true;
@@ -1738,6 +1744,11 @@ export default function App() {
   // --- Efforts Calculations & Global Effort Search ---
   const weekDays = useMemo(() => getWorkWeekDays(weekOffset), [weekOffset]);
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const yesterdayStr = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  }, []);
 
   const hoursPerDateMap = useMemo(() => {
     const map: Record<string, number> = {};
@@ -4110,12 +4121,50 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Date Selection Control */}
+                <div className="flex items-center justify-between gap-1.5 bg-[#0f172a] border border-[#1e293b] rounded-xl px-2.5 py-1.5">
+                  <div className="flex items-center gap-1.5 text-xs text-[#64748b] font-mono shrink-0">
+                    <Calendar className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-[11px] uppercase">Date</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setTicketEffortDate(todayStr)}
+                      className={`px-2 py-0.5 rounded-lg text-[11px] font-mono transition ${
+                        ticketEffortDate === todayStr 
+                          ? 'bg-blue-600 text-white font-semibold shadow-sm' 
+                          : 'bg-[#1e293b] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTicketEffortDate(yesterdayStr)}
+                      className={`px-2 py-0.5 rounded-lg text-[11px] font-mono transition ${
+                        ticketEffortDate === yesterdayStr 
+                          ? 'bg-blue-600 text-white font-semibold shadow-sm' 
+                          : 'bg-[#1e293b] text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Yesterday
+                    </button>
+                    <input
+                      type="date"
+                      value={ticketEffortDate}
+                      onChange={e => setTicketEffortDate(e.target.value)}
+                      className="bg-[#090d16] border border-[#1e293b] text-[#f1f5f9] rounded-lg px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
                 {/* Preset quick buttons */}
                 <div className="grid grid-cols-4 gap-2">
                   {[0.5, 1.0, 2.0, 4.0].map(hrs => (
                     <button
                       key={hrs}
-                      onClick={() => handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, hrs, todayStr, 'Work on ticket')}
+                      onClick={() => handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, hrs, ticketEffortDate || todayStr, 'Work on ticket')}
                       className="py-2 rounded-xl bg-[#0f172a] hover:bg-[#1e293b] border border-[#1e293b] text-xs font-mono font-semibold text-emerald-400 transition"
                     >
                       +{hrs}h
@@ -4148,15 +4197,16 @@ export default function App() {
                     onClick={() => {
                       const h = parseFloat(customEffortHours);
                       if (h > 0) {
-                        handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, h, todayStr, customEffortComment);
+                        handleLogEffortDirect(selectedTicket.id, selectedTicket.subject, h, ticketEffortDate || todayStr, customEffortComment);
                         setCustomEffortHours('');
                         setCustomEffortComment('');
                       }
                     }}
                     disabled={!customEffortHours || parseFloat(customEffortHours) <= 0}
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-medium py-2 rounded-xl text-xs transition font-mono"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-medium py-2 rounded-xl text-xs transition font-mono flex items-center justify-center gap-1.5"
                   >
-                    Log Custom Effort
+                    <span>Log Effort</span>
+                    <span className="opacity-80 text-[10px]">({ticketEffortDate === todayStr ? 'Today' : ticketEffortDate === yesterdayStr ? 'Yesterday' : ticketEffortDate})</span>
                   </button>
                 </div>
               </div>
