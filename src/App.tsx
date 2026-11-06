@@ -25,8 +25,10 @@ import {
   AlertCircle,
   Pencil,
   UploadCloud,
-  DownloadCloud
+  DownloadCloud,
+  Monitor
 } from 'lucide-react';
+import DesktopWorkspace from './components/DesktopWorkspace';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -210,6 +212,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'tickets' | 'efforts'>('tickets');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRefreshingPWA, setIsRefreshingPWA] = useState(false);
+
+  // Layout View Mode (PC Desktop vs Mobile Frame)
+  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('op_view_mode') : null;
+    if (saved === 'desktop' || saved === 'mobile') return saved;
+    return typeof window !== 'undefined' && window.innerWidth >= 1024 ? 'desktop' : 'mobile';
+  });
+
+  const handleSetViewMode = (mode: 'desktop' | 'mobile') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('op_view_mode', mode);
+    } catch (_) {}
+  };
 
   // Google Sheet Database & Dual-Sync States
   const [opSheetUrl, setOpSheetUrl] = useState('');
@@ -1855,6 +1871,166 @@ export default function App() {
     return tickets.filter(t => t.pendingSync).length;
   }, [tickets]);
 
+  // Quick reset filters helper
+  const handleResetFilters = () => {
+    setFilterProjects([]);
+    setFilterStatuses([]);
+    setFilterStatusCategory('open');
+    setFilterType('');
+    setFilterAssignee('');
+    setFilterPriority('');
+    setFilterStarredOnly(false);
+  };
+
+  // --- PC Desktop Workspace View Mode ---
+  if (viewMode === 'desktop') {
+    return (
+      <div className="min-h-screen bg-[#090d16] text-[#f1f5f9] selection:bg-blue-600/30 font-sans relative overflow-hidden">
+        <DesktopWorkspace
+          tickets={tickets}
+          filteredTickets={filteredTickets}
+          starredTickets={starredTickets}
+          statuses={statuses}
+          types={types}
+          displayPriorities={displayPriorities}
+          projectsList={projectsList}
+          projectAssigneesMap={projectAssigneesMap}
+          currentUser={currentUser}
+          selectedTicketId={selectedTicketId}
+          setSelectedTicketId={setSelectedTicketId}
+          selectedTicket={selectedTicket}
+          selectedTicketStats={selectedTicketStats}
+          ticketEffortsList={ticketEffortsList}
+          isLoadingTicketEfforts={isLoadingTicketEfforts}
+          allEfforts={allEfforts}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          isSearchingRemote={isSearchingRemote}
+          handleRemoteSearch={handleRemoteSearch}
+          filterProjects={filterProjects}
+          setFilterProjects={setFilterProjects}
+          filterStatuses={filterStatuses}
+          setFilterStatuses={setFilterStatuses}
+          filterStatusCategory={filterStatusCategory}
+          setFilterStatusCategory={setFilterStatusCategory}
+          filterType={filterType}
+          setFilterType={setFilterType}
+          filterAssignee={filterAssignee}
+          setFilterAssignee={setFilterAssignee}
+          filterPriority={filterPriority}
+          setFilterPriority={setFilterPriority}
+          filterStarredOnly={filterStarredOnly}
+          setFilterStarredOnly={setFilterStarredOnly}
+          sortBy={sortBy}
+          setSortBy={setSortBy}
+          activeFilterCount={activeFilterCount}
+          resetFilters={handleResetFilters}
+          savedViews={savedViews}
+          activeViewId={activeViewId}
+          applySavedView={applySavedView}
+          todayTotalHours={todayTotalHours}
+          weeklyTotalHours={weeklyTotalHours}
+          hoursPerDateMap={hoursPerDateMap}
+          weekDays={weekDays}
+          weekOffset={weekOffset}
+          setWeekOffset={setWeekOffset}
+          selectedEffortDate={selectedEffortDate}
+          setSelectedEffortDate={setSelectedEffortDate}
+          effortsForSelectedDate={effortsForSelectedDate}
+          effortSearchQuery={effortSearchQuery}
+          setEffortSearchQuery={setEffortSearchQuery}
+          searchedEfforts={searchedEfforts}
+          isSyncing={isSyncing}
+          isOnline={isOnline}
+          lastSyncText={lastSyncText}
+          pendingCount={pendingCount}
+          handleSync={handleSync}
+          handleToggleStar={handleToggleStar}
+          handleUpdateStatus={handleUpdateStatus}
+          handleUpdateAssignee={handleUpdateAssignee}
+          handleDeleteEffort={(entry) => {
+            const eff = allEfforts.find(e => e.id === entry.id || e.id.replace(/^pending-/, '') === entry.id);
+            if (eff) {
+              handleDeleteEffort(eff);
+            } else {
+              handleDeleteTicketHistoryEntry(entry as any);
+            }
+          }}
+          handleEditEffort={(entry) => {
+            const eff = allEfforts.find(e => e.id === entry.id);
+            if (eff) {
+              handleOpenEditEffort(eff);
+            } else {
+              handleOpenEditEffort({
+                id: entry.id,
+                workPackageId: entry.workPackageId,
+                ticketSubject: entry.ticketSubject,
+                hours: entry.hours,
+                comment: entry.comment,
+                spentOn: entry.spentOn,
+                createdAt: new Date().toISOString()
+              });
+            }
+          }}
+          setIsAddEffortModalOpen={setIsAddEffortModalOpen}
+          setZoomedImageUrl={setZoomedImageUrl}
+          opUrl={opUrl}
+          opSheetUrl={opSheetUrl}
+          isSyncingSheet={isSyncingSheet}
+          isRestoringSheet={isRestoringSheet}
+          sheetLastSyncTime={sheetLastSyncTime}
+          handleSyncWithSheet={handleSyncAllToSheet}
+          handleRestoreFromSheet={handleRestoreFromSheet}
+          onSwitchToMobileView={() => handleSetViewMode('mobile')}
+          onQuickLogEffortSubmit={async (ticketId, hoursStr, comment) => {
+            const h = parseFloat(hoursStr);
+            if (!isNaN(h) && h > 0) {
+              const target = tickets.find(t => t.id === ticketId);
+              await handleLogEffortDirect(
+                ticketId,
+                target?.subject || `Ticket #${ticketId}`,
+                h,
+                new Date().toISOString().split('T')[0],
+                comment
+              );
+            }
+          }}
+          onAddCommentSubmit={async (ticketId, comment) => {
+            if (!ticketId || !comment.trim()) return;
+            const target = tickets.find(t => t.id === ticketId);
+            try {
+              await OpenProjectService.addComment(String(ticketId), comment, target?.lockVersion ?? 1);
+              showEphemeralNotice('Comment posted to OpenProject');
+            } catch (err: any) {
+              console.error('Failed to post comment:', err);
+              showEphemeralNotice('Failed to post comment');
+            }
+          }}
+          onSaveSettings={async (url, key, sheet) => {
+            await OpenProjectService.saveCredentials(url, key || opApiKey);
+            setOpUrl(url);
+            if (key) setOpApiKey(key);
+            if (sheet) {
+              sheetSyncService.setSheetUrl(sheet);
+              setOpSheetUrl(sheet);
+            }
+            showEphemeralNotice('Settings saved successfully');
+          }}
+        />
+
+        {/* Ephemeral Toast Notice for Desktop */}
+        {syncNotice && (
+          <div className="fixed top-4 right-4 bg-blue-600 text-white text-xs px-4 py-2 rounded-xl shadow-xl font-medium flex items-center gap-3 z-50 animate-in slide-in-from-top-2">
+            <span>{syncNotice}</span>
+            <button onClick={() => setSyncNotice(null)} className="p-0.5 hover:opacity-80">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#090d16] text-[#f1f5f9] flex justify-center selection:bg-blue-600/30 font-sans">
       
@@ -1912,6 +2088,15 @@ export default function App() {
               <Clock className="w-3.5 h-3.5 shrink-0" />
               <span className="font-mono text-xs font-bold leading-none">{todayTotalHours.toFixed(1)}h</span>
               <span className="font-mono text-[10px] text-[#64748b] leading-none">/8h</span>
+            </button>
+
+            {/* Switch to PC Desktop View Button */}
+            <button 
+              onClick={() => handleSetViewMode('desktop')}
+              className="p-1.5 text-blue-400 hover:text-white border border-blue-500/30 bg-blue-500/10 hover:bg-blue-600 rounded-xl transition shrink-0"
+              title="Switch to PC Desktop View"
+            >
+              <Monitor className="w-4 h-4" />
             </button>
 
             {/* Settings Modal Button */}
