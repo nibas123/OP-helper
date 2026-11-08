@@ -21,6 +21,7 @@ import {
   type LocalEffort, 
   type LookupItem, 
   type SavedView,
+  type SyncQueueItem,
   DEFAULT_SAVED_VIEWS 
 } from './services/db';
 import { syncService, parseDurationToHours } from './services/syncService';
@@ -132,6 +133,7 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [lastSyncText, setLastSyncText] = useState<string>('Local DB');
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [syncQueue, setSyncQueue] = useState<SyncQueueItem[]>([]);
 
   // Efforts & Weekly Tracking (5-Day Work Week, Mon-Fri)
   const [weekOffset, setWeekOffset] = useState(0);
@@ -203,6 +205,9 @@ export default function App() {
 
       const efforts = await db.getAllEfforts();
       setAllEfforts(efforts);
+
+      const queue = await db.getSyncQueue();
+      setSyncQueue(queue);
 
       const lastSync = await db.getMeta<number>('lastSyncTime');
       if (lastSync) {
@@ -1405,6 +1410,15 @@ export default function App() {
   const weeklyTotalHours = useMemo(() => {
     return weekDays.reduce((sum, d) => sum + (hoursPerDateMap[d.dateStr] || 0), 0);
   }, [weekDays, hoursPerDateMap]);
+  const currentMonthStr = useMemo(() => new Date().toISOString().slice(0, 7), []);
+  const monthTotalHours = useMemo(() => {
+    return allEfforts.reduce((sum, eff) => {
+      if (eff.spentOn && eff.spentOn.startsWith(currentMonthStr)) {
+        return +(sum + eff.hours).toFixed(2);
+      }
+      return sum;
+    }, 0);
+  }, [allEfforts, currentMonthStr]);
 
   const effortsForSelectedDate = useMemo(() => {
     return allEfforts.filter(e => e.spentOn === selectedEffortDate);
@@ -1427,8 +1441,44 @@ export default function App() {
   }, [allEfforts, effortSearchQuery]);
 
   const pendingCount = useMemo(() => {
-    return tickets.filter(t => t.pendingSync).length;
-  }, [tickets]);
+    const queueCount = syncQueue.length;
+    const localPendingTickets = tickets.filter(t => t.pendingSync).length;
+    const localPendingEfforts = allEfforts.filter(e => e.pendingSync).length;
+    return Math.max(queueCount, localPendingTickets + localPendingEfforts);
+  }, [syncQueue, tickets, allEfforts]);
+
+  const handleProcessSingleSyncItem = async (item: SyncQueueItem) => {
+    try {
+      await syncService.processQueueItem(item);
+      showEphemeralNotice(`Synced item to OpenProject`);
+      await loadLocalData();
+    } catch (err: any) {
+      showEphemeralNotice(`Failed to sync item: ${err?.message || 'Error'}`);
+    }
+  };
+
+  const handleDiscardSyncItem = async (item: SyncQueueItem) => {
+    await db.removeSyncItem(item.id);
+    if (item.type === 'UPDATE_STATUS' || item.type === 'UPDATE_ASSIGNEE') {
+      const t = await db.getTicket(Number(item.payload.ticketId));
+      if (t) {
+        await db.putTicket({ ...t, pendingSync: false });
+      }
+    } else if (item.type === 'LOG_TIME') {
+      const allEff = await db.getAllEfforts();
+      const match = allEff.find(e => String(e.workPackageId) === String(item.payload.ticketId) && e.spentOn === item.payload.date && e.pendingSync);
+      if (match) {
+        await db.deleteEffort(match.id);
+      }
+    } else if (item.type === 'UPDATE_TIME') {
+      const eff = allEfforts.find(e => e.id === item.payload.id);
+      if (eff) {
+        await db.putEffort({ ...eff, pendingSync: false });
+      }
+    }
+    showEphemeralNotice('Discarded pending change');
+    await loadLocalData();
+  };
 
   // Quick reset filters helper
   const handleResetFilters = () => {
@@ -1488,6 +1538,10 @@ export default function App() {
           applySavedView={applySavedView}
           todayTotalHours={todayTotalHours}
           weeklyTotalHours={weeklyTotalHours}
+          monthTotalHours={monthTotalHours}
+          syncQueue={syncQueue}
+          handleProcessSingleSyncItem={handleProcessSingleSyncItem}
+          handleDiscardSyncItem={handleDiscardSyncItem}
           hoursPerDateMap={hoursPerDateMap}
           weekDays={weekDays}
           weekOffset={weekOffset}

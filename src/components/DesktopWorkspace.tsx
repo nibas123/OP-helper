@@ -27,12 +27,14 @@ import {
   Copy,
   FileText,
   Globe,
-  CheckCircle2
+  CheckCircle2,
+  Send,
+  Calendar
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import type { LocalTicket, LocalEffort, LookupItem, SavedView } from '../services/db';
+import type { LocalTicket, LocalEffort, LookupItem, SavedView, SyncQueueItem } from '../services/db';
 import { parseDurationToHours } from '../services/syncService';
 import { AuthenticatedImage } from './AuthenticatedImage';
 import { preprocessOpenProjectMarkdown } from '../utils/markdownUtils';
@@ -137,6 +139,10 @@ export interface DesktopWorkspaceProps {
   setIsSaveViewModalOpen?: (open: boolean) => void;
   onQuickLogEffortSubmit?: (ticketId: number, hours: string, comment: string) => Promise<void>;
   onAddCommentSubmit?: (ticketId: number, comment: string) => Promise<void>;
+  monthTotalHours?: number;
+  syncQueue?: SyncQueueItem[];
+  handleProcessSingleSyncItem?: (item: SyncQueueItem) => Promise<void>;
+  handleDiscardSyncItem?: (item: SyncQueueItem) => Promise<void>;
   onSaveSettings?: (url: string, key: string, sheetUrl: string) => Promise<void>;
 }
 
@@ -183,6 +189,10 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     applySavedView,
     todayTotalHours,
     weeklyTotalHours,
+    monthTotalHours = 0,
+    syncQueue = [],
+    handleProcessSingleSyncItem,
+    handleDiscardSyncItem,
     hoursPerDateMap,
     weekDays,
     weekOffset,
@@ -222,6 +232,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'sheet' | 'settings'>('tickets');
   const [inspectorTab, setInspectorTab] = useState<'details' | 'efforts' | 'comments'>('details');
   const [copiedId, setCopiedId] = useState(false);
+  const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
+  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
 
   // Quick effort state inside inspector
   const [quickEffortHours, setQuickEffortHours] = useState('1.0');
@@ -533,11 +545,21 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             <span className="truncate">{isSyncing ? 'Syncing...' : lastSyncText}</span>
           </button>
 
-          {pendingCount > 0 && (
-            <span className="px-2 py-1 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold" title="Pending offline changes">
-              {pendingCount}
-            </span>
-          )}
+          <button
+            onClick={() => {
+              if (isMobile) setIsMobileMenuOpen(false);
+              setIsOutboxModalOpen(true);
+            }}
+            className={`px-2 py-1.5 rounded-lg border text-[11px] font-mono font-bold flex items-center gap-1 transition ${
+              pendingCount > 0
+                ? 'bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/25'
+                : 'bg-[#0d1322] text-slate-400 border-[#1e293b] hover:text-white'
+            }`}
+            title="Outbox & Pending Changes - Click to review & send manually"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>{pendingCount}</span>
+          </button>
 
           <button
             onClick={() => {
@@ -632,23 +654,50 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
           </div>
 
           {/* Right Top Header Actions */}
-          <div className="flex items-center gap-3 shrink-0">
-            {/* Quick Effort Summary Pill */}
-            <button
-              onClick={() => setIsAddEffortModalOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 hover:bg-emerald-500/20 text-emerald-400 transition text-xs font-mono group"
-              title="Click to log time"
-            >
-              <Timer className="w-4 h-4 text-emerald-400" />
-              <span>
-                Today: <strong className="text-white">{todayTotalHours.toFixed(1)}h</strong> / 8.0h
+          <div className="flex items-center gap-2.5 shrink-0">
+            {/* Quick Effort Summary Pill - Today, Week, Month */}
+            <div className="flex items-center bg-[#090d16] border border-[#1e293b] rounded-xl p-1 gap-1 text-xs font-mono">
+              <button
+                onClick={() => setIsAddEffortModalOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition"
+                title="Today's hours - click to log time"
+              >
+                <Timer className="w-3.5 h-3.5" />
+                <span>Today: <strong className="text-white">{todayTotalHours.toFixed(1)}h</strong></span>
+              </button>
+
+              <div className="h-3.5 w-px bg-[#1e293b]" />
+
+              <span className="px-2 py-1 text-blue-400 flex items-center gap-1" title="This week's total logged hours">
+                <Clock className="w-3 h-3 text-blue-400" />
+                <span>Week: <strong className="text-white">{weeklyTotalHours.toFixed(1)}h</strong></span>
               </span>
-              <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden hidden sm:block">
-                <div
-                  className="h-full bg-emerald-400 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, (todayTotalHours / 8) * 100)}%` }}
-                />
-              </div>
+
+              <div className="h-3.5 w-px bg-[#1e293b] hidden md:block" />
+
+              <span className="px-2 py-1 text-purple-400 hidden md:flex items-center gap-1" title="This month's total logged hours">
+                <Calendar className="w-3 h-3 text-purple-400" />
+                <span>Month: <strong className="text-white">{monthTotalHours.toFixed(1)}h</strong></span>
+              </span>
+            </div>
+
+            {/* Outbox / Pending Syncs Button */}
+            <button
+              onClick={() => setIsOutboxModalOpen(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono transition ${
+                pendingCount > 0
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25'
+                  : 'bg-[#090d16] border-[#1e293b] text-slate-300 hover:border-slate-600'
+              }`}
+              title="View pending syncs & outbox"
+            >
+              <Send className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Outbox</span>
+              {pendingCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-md bg-amber-500/30 text-amber-300 font-bold text-[10px]">
+                  {pendingCount}
+                </span>
+              )}
             </button>
 
             {/* Manual Sync Button */}
@@ -679,7 +728,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
         {activeTab === 'tickets' && (
           <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Top Bento KPI Summary Cards */}
-            <div className="px-6 py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-2 md:grid-cols-5 gap-3 shrink-0">
+            <div className="px-6 py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 shrink-0">
               <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-blue-500/30 transition">
                 <span className="text-[11px] font-mono text-[#94a3b8] uppercase tracking-wide">Work Packages</span>
                 <div className="flex items-baseline gap-2 mt-1">
@@ -726,7 +775,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today's Effort</span>
                 <div className="flex items-baseline gap-2 mt-1">
                   <span className="text-xl font-bold text-emerald-400 font-mono">{todayTotalHours.toFixed(1)}h</span>
-                  <span className="text-[11px] text-[#64748b]">/ 8.0h target</span>
+                  <span className="text-[11px] text-[#64748b]">/ 8.0h</span>
                 </div>
               </div>
 
@@ -734,7 +783,15 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 <span className="text-[11px] font-mono text-blue-400 uppercase tracking-wide">Week Total</span>
                 <div className="flex items-baseline gap-2 mt-1">
                   <span className="text-xl font-bold text-blue-400 font-mono">{weeklyTotalHours.toFixed(1)}h</span>
-                  <span className="text-[11px] text-[#64748b]">/ 40.0h week</span>
+                  <span className="text-[11px] text-[#64748b]">/ 40.0h</span>
+                </div>
+              </div>
+
+              <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-purple-500/30 transition">
+                <span className="text-[11px] font-mono text-purple-400 uppercase tracking-wide">Month Total</span>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-xl font-bold text-purple-400 font-mono">{monthTotalHours.toFixed(1)}h</span>
+                  <span className="text-[11px] text-[#64748b]">/ 160h</span>
                 </div>
               </div>
             </div>
@@ -1385,6 +1442,45 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               </div>
             </div>
 
+            {/* KPI Summary strip for Today, This Week, and This Month */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today's Total</span>
+                  <div className="text-2xl font-bold text-white font-mono mt-0.5">
+                    {todayTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 8.0h target</span>
+                  </div>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                  <Timer className="w-5 h-5" />
+                </div>
+              </div>
+
+              <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-mono text-blue-400 uppercase tracking-wide">This Week Total</span>
+                  <div className="text-2xl font-bold text-white font-mono mt-0.5">
+                    {weeklyTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 40.0h week</span>
+                  </div>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                  <Clock className="w-5 h-5" />
+                </div>
+              </div>
+
+              <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-mono text-purple-400 uppercase tracking-wide">This Month Total</span>
+                  <div className="text-2xl font-bold text-white font-mono mt-0.5">
+                    {monthTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 160h month</span>
+                  </div>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                  <Calendar className="w-5 h-5" />
+                </div>
+              </div>
+            </div>
+
             {/* 5-Day Work Week Grid (Interactive cards for Mon - Fri) */}
             <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
               {weekDays.map(day => {
@@ -1709,6 +1805,236 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
           </main>
         )}
       </div>
+
+      {/* ===================================================================== */}
+      {/* PENDING SYNCS / OUTBOX MODAL */}
+      {/* ===================================================================== */}
+      {isOutboxModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-[#1e293b] flex items-center justify-between bg-[#0a0f1d]">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Send className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-white">Pending Changes & Outbox</h3>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono text-xs font-semibold">
+                      {syncQueue.length} item{syncQueue.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#64748b] mt-0.5">
+                    Review and manually sync or discard pending actions before sending to OpenProject
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsOutboxModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e293b] transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Actions Bar if items exist */}
+            {syncQueue.length > 0 && (
+              <div className="px-5 py-2.5 bg-[#090d16] border-b border-[#1e293b] flex items-center justify-between">
+                <span className="text-xs text-slate-400">
+                  Click <strong>Send Now</strong> on any item to sync individually, or sync all:
+                </span>
+                <button
+                  onClick={async () => {
+                    await handleSync(true);
+                  }}
+                  disabled={isSyncing}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50 shadow-md shadow-blue-600/20"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>Sync All to Server ({syncQueue.length})</span>
+                </button>
+              </div>
+            )}
+
+            {/* Body / List */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-3 flex-1 min-h-[220px]">
+              {syncQueue.length === 0 ? (
+                <div className="h-56 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 mb-3">
+                    <CheckCircle2 className="w-7 h-7" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white mb-1">Outbox is Clean!</h4>
+                  <p className="text-xs text-[#64748b] max-w-sm">
+                    All local changes have been successfully synced to your OpenProject server. Any offline updates will appear here.
+                  </p>
+                </div>
+              ) : (
+                syncQueue.map((item) => {
+                  const isProcessing = processingItemId === item.id;
+                  const ticket = item.payload.ticketId
+                    ? tickets.find(t => String(t.id) === String(item.payload.ticketId))
+                    : null;
+                  const ticketSubject = ticket ? ticket.subject : null;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-3.5 rounded-xl border border-[#1e293b] bg-[#0f172a] hover:border-slate-700 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      {/* Left: Item Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          {item.type === 'LOG_TIME' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                              LOG EFFORT
+                            </span>
+                          )}
+                          {item.type === 'UPDATE_STATUS' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                              STATUS UPDATE
+                            </span>
+                          )}
+                          {item.type === 'UPDATE_ASSIGNEE' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                              REASSIGN
+                            </span>
+                          )}
+                          {item.type === 'UPDATE_TIME' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                              EDIT EFFORT
+                            </span>
+                          )}
+                          {item.type === 'DELETE_TIME' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                              DELETE EFFORT
+                            </span>
+                          )}
+
+                          <span className="text-[11px] text-[#64748b] font-mono">
+                            {item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                        </div>
+
+                        {/* Description */}
+                        <div className="text-xs text-white">
+                          {item.type === 'LOG_TIME' && (
+                            <div>
+                              <span className="font-semibold text-emerald-300">
+                                Log {parseDurationToHours(item.payload.hours).toFixed(1)}h
+                              </span>
+                              {' on '}
+                              <span className="font-mono text-blue-300">#{item.payload.ticketId}</span>
+                              {ticketSubject && <span className="text-slate-300"> ({ticketSubject})</span>}
+                              {' for '}
+                              <span className="text-slate-400 font-mono">{item.payload.date}</span>
+                              {item.payload.comment && (
+                                <p className="text-[11px] text-slate-400 italic mt-0.5 truncate">
+                                  "{item.payload.comment}"
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {item.type === 'UPDATE_STATUS' && (
+                            <div>
+                              <span>Set status of </span>
+                              <span className="font-mono text-blue-300">#{item.payload.ticketId}</span>
+                              {ticketSubject && <span className="text-slate-300"> ({ticketSubject})</span>}
+                              <span> to </span>
+                              <strong className="text-blue-400">
+                                {statuses.find(s => s.id === item.payload.statusId)?.name || `Status #${item.payload.statusId}`}
+                              </strong>
+                            </div>
+                          )}
+
+                          {item.type === 'UPDATE_ASSIGNEE' && (
+                            <div>
+                              <span>Reassign </span>
+                              <span className="font-mono text-blue-300">#{item.payload.ticketId}</span>
+                              {ticketSubject && <span className="text-slate-300"> ({ticketSubject})</span>}
+                              <span> to user ID </span>
+                              <strong className="text-indigo-400">
+                                {item.payload.assigneeId}
+                              </strong>
+                            </div>
+                          )}
+
+                          {item.type === 'UPDATE_TIME' && (
+                            <div>
+                              <span>Edit effort entry </span>
+                              <span className="font-mono text-cyan-300">#{item.payload.id}</span>
+                              <span>: {parseDurationToHours(item.payload.hours).toFixed(1)}h</span>
+                              {item.payload.comment && (
+                                <p className="text-[11px] text-slate-400 italic mt-0.5 truncate">
+                                  "{item.payload.comment}"
+                                </p>
+                              )}
+                            </div>
+                          )}
+
+                          {item.type === 'DELETE_TIME' && (
+                            <div>
+                              <span>Delete effort entry </span>
+                              <span className="font-mono text-rose-300">#{item.payload.id}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right: Actions */}
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <button
+                          onClick={async () => {
+                            if (!handleProcessSingleSyncItem) return;
+                            setProcessingItemId(item.id);
+                            try {
+                              await handleProcessSingleSyncItem(item);
+                            } finally {
+                              setProcessingItemId(null);
+                            }
+                          }}
+                          disabled={isProcessing || isSyncing}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                          title="Send this item to OpenProject immediately"
+                        >
+                          <Send className={`w-3.5 h-3.5 ${isProcessing ? 'animate-pulse' : ''}`} />
+                          <span>{isProcessing ? 'Sending...' : 'Send Now'}</span>
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            if (!handleDiscardSyncItem) return;
+                            await handleDiscardSyncItem(item);
+                          }}
+                          disabled={isProcessing || isSyncing}
+                          className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-slate-400 hover:text-rose-400 hover:border-rose-500/40 transition disabled:opacity-50"
+                          title="Discard this pending change"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-[#1e293b] bg-[#0a0f1d] flex items-center justify-between">
+              <span className="text-[11px] text-[#64748b]">
+                Status: {isOnline ? 'Online (Connected)' : 'Offline (Local only)'}
+              </span>
+              <button
+                onClick={() => setIsOutboxModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl border border-[#1e293b] bg-[#0d1322] hover:bg-[#1e293b] text-xs font-semibold text-slate-300 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

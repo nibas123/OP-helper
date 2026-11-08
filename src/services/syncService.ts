@@ -1,5 +1,5 @@
 import { OpenProjectService } from './OpenProjectService';
-import { db, type LocalTicket, type LocalEffort } from './db';
+import { db, type LocalTicket, type LocalEffort, type SyncQueueItem } from './db';
 import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
 
 export interface SyncStatus {
@@ -56,6 +56,68 @@ export function formatDurationHours(hours?: number | null): string {
 
 export const syncService = {
   /**
+   * Process a single queued sync item immediately
+   */
+  async processQueueItem(item: SyncQueueItem): Promise<void> {
+    if (item.type === 'UPDATE_STATUS') {
+      await OpenProjectService.updateWorkPackageStatus(
+        item.payload.ticketId,
+        item.payload.statusId,
+        item.payload.lockVersion
+      );
+      await db.removeSyncItem(item.id);
+      const t = await db.getTicket(Number(item.payload.ticketId));
+      if (t) {
+        await db.putTicket({ ...t, pendingSync: false });
+      }
+    } else if (item.type === 'UPDATE_ASSIGNEE') {
+      await OpenProjectService.updateWorkPackageAssignee(
+        item.payload.ticketId,
+        item.payload.assigneeId,
+        item.payload.lockVersion
+      );
+      await db.removeSyncItem(item.id);
+      const t = await db.getTicket(Number(item.payload.ticketId));
+      if (t) {
+        await db.putTicket({ ...t, pendingSync: false });
+      }
+    } else if (item.type === 'LOG_TIME') {
+      await OpenProjectService.logTime(
+        item.payload.ticketId,
+        item.payload.hours,
+        item.payload.comment,
+        item.payload.date
+      );
+      await db.removeSyncItem(item.id);
+      const allEfforts = await db.getAllEfforts();
+      const match = allEfforts.find(
+        e => String(e.workPackageId) === String(item.payload.ticketId) &&
+             e.spentOn === item.payload.date &&
+             e.pendingSync
+      );
+      if (match) {
+        await db.putEffort({ ...match, pendingSync: false });
+      }
+    } else if (item.type === 'UPDATE_TIME') {
+      await OpenProjectService.updateTimeEntry(
+        item.payload.id,
+        item.payload.hours,
+        item.payload.comment,
+        item.payload.date
+      );
+      await db.removeSyncItem(item.id);
+      const allEfforts = await db.getAllEfforts();
+      const match = allEfforts.find(e => e.id === item.payload.id);
+      if (match) {
+        await db.putEffort({ ...match, pendingSync: false });
+      }
+    } else if (item.type === 'DELETE_TIME') {
+      await OpenProjectService.deleteTimeEntry(item.payload.id);
+      await db.removeSyncItem(item.id);
+    }
+  },
+
+  /**
    * Main sync routine: flushes outbox queue, fetches latest tickets, statuses, users & efforts, saves to IndexedDB.
    */
   async syncAll(): Promise<{ success: boolean; reason?: string; count?: number }> {
@@ -73,40 +135,7 @@ export const syncService = {
       const queue = await db.getSyncQueue();
       for (const item of queue) {
         try {
-          if (item.type === 'UPDATE_STATUS') {
-            await OpenProjectService.updateWorkPackageStatus(
-              item.payload.ticketId,
-              item.payload.statusId,
-              item.payload.lockVersion
-            );
-            await db.removeSyncItem(item.id);
-          } else if (item.type === 'UPDATE_ASSIGNEE') {
-            await OpenProjectService.updateWorkPackageAssignee(
-              item.payload.ticketId,
-              item.payload.assigneeId,
-              item.payload.lockVersion
-            );
-            await db.removeSyncItem(item.id);
-          } else if (item.type === 'LOG_TIME') {
-            await OpenProjectService.logTime(
-              item.payload.ticketId,
-              item.payload.hours,
-              item.payload.comment,
-              item.payload.date
-            );
-            await db.removeSyncItem(item.id);
-          } else if (item.type === 'UPDATE_TIME') {
-            await OpenProjectService.updateTimeEntry(
-              item.payload.id,
-              item.payload.hours,
-              item.payload.comment,
-              item.payload.date
-            );
-            await db.removeSyncItem(item.id);
-          } else if (item.type === 'DELETE_TIME') {
-            await OpenProjectService.deleteTimeEntry(item.payload.id);
-            await db.removeSyncItem(item.id);
-          }
+          await this.processQueueItem(item);
         } catch (err: any) {
           console.warn('[Sync] Failed to process queue item:', item.id, err);
         }
