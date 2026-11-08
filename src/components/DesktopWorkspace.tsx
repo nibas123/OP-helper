@@ -11,7 +11,7 @@ import {
   Check,
   Plus,
   ArrowUpDown,
-  Smartphone,
+  Menu,
   ChevronDown,
   Trash2,
   Pencil,
@@ -134,7 +134,7 @@ export interface DesktopWorkspaceProps {
   sheetLastSyncTime: string;
   handleSyncWithSheet: () => void;
   handleRestoreFromSheet: () => void;
-  onSwitchToMobileView: () => void;
+  setIsSaveViewModalOpen?: (open: boolean) => void;
   onQuickLogEffortSubmit?: (ticketId: number, hours: string, comment: string) => Promise<void>;
   onAddCommentSubmit?: (ticketId: number, comment: string) => Promise<void>;
   onSaveSettings?: (url: string, key: string, sheetUrl: string) => Promise<void>;
@@ -212,12 +212,13 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     sheetLastSyncTime,
     handleSyncWithSheet,
     handleRestoreFromSheet,
-    onSwitchToMobileView,
+    setIsSaveViewModalOpen,
     onQuickLogEffortSubmit,
     onAddCommentSubmit,
     onSaveSettings
   } = props;
 
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'sheet' | 'settings'>('tickets');
   const [inspectorTab, setInspectorTab] = useState<'details' | 'efforts' | 'comments'>('details');
   const [copiedId, setCopiedId] = useState(false);
@@ -338,199 +339,263 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     return 'text-blue-300 bg-blue-500/10 border-blue-500/20';
   };
 
+  // Render Sidebar Content (shared between Desktop fixed rail and Mobile drawer)
+  const renderSidebarContent = (isMobile = false) => (
+    <div className="flex flex-col h-full">
+      {/* Brand / Logo Header */}
+      <div className="p-4 border-b border-[#1e293b] flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/20">
+            OP
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-sm text-white tracking-wide">OpenProject</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30">
+                PRO
+              </span>
+            </div>
+            <p className="text-[11px] text-[#64748b] font-mono">Web Workspace</p>
+          </div>
+        </div>
+        {isMobile && (
+          <button
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-[#1e293b] transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Current User Pill */}
+      <div className="px-4 py-3 border-b border-[#1e293b]/70 bg-[#0a0e1a]/60 flex items-center justify-between">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-7 h-7 rounded-full bg-blue-600/20 text-blue-400 font-bold font-mono text-xs flex items-center justify-center shrink-0 border border-blue-500/30">
+            {currentUser.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+          </div>
+          <div className="truncate">
+            <p className="text-xs font-medium text-slate-200 truncate">{currentUser.name}</p>
+            <p className="text-[10px] text-[#64748b] font-mono">ID: #{currentUser.id}</p>
+          </div>
+        </div>
+        <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 ring-4 ring-emerald-400/20' : 'bg-amber-400'}`} title={isOnline ? 'Online' : 'Offline'} />
+      </div>
+
+      {/* Primary Navigation Menu */}
+      <nav className="flex-1 p-3 space-y-1.5 overflow-y-auto">
+        <div className="px-3 py-1.5 text-[10px] font-mono font-semibold tracking-wider text-[#64748b] uppercase">
+          Workspace
+        </div>
+
+        <button
+          onClick={() => {
+            setActiveTab('tickets');
+            if (isMobile) setIsMobileMenuOpen(false);
+          }}
+          className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
+            activeTab === 'tickets'
+              ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
+              : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <FolderKanban className="w-4 h-4" />
+            <span>Work Packages</span>
+          </div>
+          <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${activeTab === 'tickets' ? 'bg-blue-700/60 text-white' : 'bg-[#1e293b] text-[#94a3b8]'}`}>
+            {filteredTickets.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('efforts');
+            if (isMobile) setIsMobileMenuOpen(false);
+          }}
+          className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
+            activeTab === 'efforts'
+              ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
+              : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <Clock className="w-4 h-4" />
+            <span>Effort & Time Tracker</span>
+          </div>
+          <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${activeTab === 'efforts' ? 'bg-blue-700/60 text-white' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+            {todayTotalHours.toFixed(1)}h
+          </span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('sheet');
+            if (isMobile) setIsMobileMenuOpen(false);
+          }}
+          className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
+            activeTab === 'sheet'
+              ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
+              : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <Database className="w-4 h-4" />
+            <span>Google Sheet Dual-Sync</span>
+          </div>
+          {opSheetUrl && (
+            <span className="w-2 h-2 rounded-full bg-emerald-400" title="Sheet connected" />
+          )}
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('settings');
+            if (isMobile) setIsMobileMenuOpen(false);
+          }}
+          className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
+            activeTab === 'settings'
+              ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
+              : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <Settings className="w-4 h-4" />
+            <span>Settings & Server</span>
+          </div>
+        </button>
+
+        {/* Quick Filters / Saved Views in Sidebar */}
+        <div className="pt-4 px-3 py-1.5 flex items-center justify-between text-[10px] font-mono font-semibold tracking-wider text-[#64748b] uppercase">
+          <span>Quick Views</span>
+          {setIsSaveViewModalOpen && (
+            <button
+              onClick={() => {
+                if (isMobile) setIsMobileMenuOpen(false);
+                setIsSaveViewModalOpen(true);
+              }}
+              className="text-blue-400 hover:text-blue-300 normal-case flex items-center gap-0.5 text-[10px]"
+              title="Save current filters as a new saved view"
+            >
+              <Plus className="w-3 h-3" />
+              <span>Save</span>
+            </button>
+          )}
+        </div>
+        <div className="space-y-1">
+          {savedViews.slice(0, 6).map(view => {
+            const isActive = activeViewId === view.id;
+            return (
+              <button
+                key={view.id}
+                onClick={() => {
+                  setActiveTab('tickets');
+                  applySavedView(view);
+                  if (isMobile) setIsMobileMenuOpen(false);
+                }}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2 text-xs transition text-left ${
+                  isActive && activeTab === 'tickets'
+                    ? 'bg-[#1e293b] text-blue-400 font-semibold'
+                    : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'
+                }`}
+              >
+                <Bookmark className={`w-3.5 h-3.5 ${isActive ? 'text-blue-400 fill-current' : 'text-[#64748b]'}`} />
+                <span className="truncate">{view.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* Sidebar Bottom Footer Actions */}
+      <div className="p-3 border-t border-[#1e293b] space-y-2 bg-[#090d16]/70">
+        {/* Quick Effort Trigger */}
+        <button
+          onClick={() => {
+            if (isMobile) setIsMobileMenuOpen(false);
+            setIsAddEffortModalOpen(true);
+          }}
+          className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center justify-center gap-2 transition active:scale-[0.98]"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Log Effort (+Hours)</span>
+        </button>
+
+        {/* Sync Button & Connection Status */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => handleSync(true)}
+            disabled={isSyncing}
+            className="flex-1 py-1.5 px-2.5 rounded-lg border border-[#1e293b] bg-[#0d1322] hover:border-blue-500/40 text-[11px] font-mono text-slate-300 flex items-center justify-center gap-2 transition"
+            title="Click to sync with OpenProject"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
+            <span className="truncate">{isSyncing ? 'Syncing...' : lastSyncText}</span>
+          </button>
+
+          {pendingCount > 0 && (
+            <span className="px-2 py-1 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold" title="Pending offline changes">
+              {pendingCount}
+            </span>
+          )}
+
+          <button
+            onClick={() => {
+              setActiveTab('settings');
+              if (isMobile) setIsMobileMenuOpen(false);
+            }}
+            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#0d1322] text-slate-400 hover:text-white hover:border-slate-600 transition"
+            title="Open Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Live Website Badge */}
+        <div className="py-2 px-3 rounded-xl bg-[#090d16] border border-[#1e293b] flex items-center justify-between text-[11px] font-mono text-[#64748b]">
+          <div className="flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-slate-300 font-medium">Web Edition</span>
+          </div>
+          <span className="text-emerald-400 font-semibold">Live</span>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-none">
+      {/* Mobile Drawer (Slide-Over Navigation) */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden animate-in fade-in duration-200">
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
+          <aside className="relative w-72 max-w-[85vw] bg-[#0d1322] border-r border-[#1e293b] flex flex-col h-full shadow-2xl z-10 animate-in slide-in-from-left duration-200">
+            {renderSidebarContent(true)}
+          </aside>
+        </div>
+      )}
+
       {/* ========================================================================= */}
-      {/* 1. LEFT NAVIGATION RAIL (Sidebar) */}
+      {/* 1. LEFT NAVIGATION RAIL (Desktop Sidebar) */}
       {/* ========================================================================= */}
-      <aside className="w-64 bg-[#0d1322] border-r border-[#1e293b] flex flex-col shrink-0 z-20">
-        {/* Brand / Logo Header */}
-        <div className="p-4 border-b border-[#1e293b] flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/20">
-              OP
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm text-white tracking-wide">OpenProject</span>
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30">
-                  PRO
-                </span>
-              </div>
-              <p className="text-[11px] text-[#64748b] font-mono">Desktop Workspace</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Current User Pill */}
-        <div className="px-4 py-3 border-b border-[#1e293b]/70 bg-[#0a0e1a]/60 flex items-center justify-between">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-7 h-7 rounded-full bg-blue-600/20 text-blue-400 font-bold font-mono text-xs flex items-center justify-center shrink-0 border border-blue-500/30">
-              {currentUser.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-            </div>
-            <div className="truncate">
-              <p className="text-xs font-medium text-slate-200 truncate">{currentUser.name}</p>
-              <p className="text-[10px] text-[#64748b] font-mono">ID: #{currentUser.id}</p>
-            </div>
-          </div>
-          <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 ring-4 ring-emerald-400/20' : 'bg-amber-400'}`} title={isOnline ? 'Online' : 'Offline'} />
-        </div>
-
-        {/* Primary Navigation Menu */}
-        <nav className="flex-1 p-3 space-y-1.5 overflow-y-auto">
-          <div className="px-3 py-1.5 text-[10px] font-mono font-semibold tracking-wider text-[#64748b] uppercase">
-            Workspace
-          </div>
-
-          <button
-            onClick={() => setActiveTab('tickets')}
-            className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
-              activeTab === 'tickets'
-                ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
-                : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <FolderKanban className="w-4 h-4" />
-              <span>Work Packages</span>
-            </div>
-            <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${activeTab === 'tickets' ? 'bg-blue-700/60 text-white' : 'bg-[#1e293b] text-[#94a3b8]'}`}>
-              {filteredTickets.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('efforts')}
-            className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
-              activeTab === 'efforts'
-                ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
-                : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Clock className="w-4 h-4" />
-              <span>Effort & Time Tracker</span>
-            </div>
-            <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full ${activeTab === 'efforts' ? 'bg-blue-700/60 text-white' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
-              {todayTotalHours.toFixed(1)}h
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sheet')}
-            className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
-              activeTab === 'sheet'
-                ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
-                : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Database className="w-4 h-4" />
-              <span>Google Sheet Dual-Sync</span>
-            </div>
-            {opSheetUrl && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400" title="Sheet connected" />
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`w-full px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-medium transition ${
-              activeTab === 'settings'
-                ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/20'
-                : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <Settings className="w-4 h-4" />
-              <span>Settings & Server</span>
-            </div>
-          </button>
-
-          {/* Quick Filters / Saved Views in Sidebar */}
-          <div className="pt-4 px-3 py-1.5 text-[10px] font-mono font-semibold tracking-wider text-[#64748b] uppercase">
-            Quick Views
-          </div>
-          <div className="space-y-1">
-            {savedViews.slice(0, 6).map(view => {
-              const isActive = activeViewId === view.id;
-              return (
-                <button
-                  key={view.id}
-                  onClick={() => {
-                    setActiveTab('tickets');
-                    applySavedView(view);
-                  }}
-                  className={`w-full px-3 py-2 rounded-lg flex items-center gap-2 text-xs transition text-left ${
-                    isActive && activeTab === 'tickets'
-                      ? 'bg-[#1e293b] text-blue-400 font-semibold'
-                      : 'text-slate-400 hover:bg-[#1e293b]/40 hover:text-slate-200'
-                  }`}
-                >
-                  <Bookmark className={`w-3.5 h-3.5 ${isActive ? 'text-blue-400 fill-current' : 'text-[#64748b]'}`} />
-                  <span className="truncate">{view.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
-
-        {/* Sidebar Bottom Footer Actions */}
-        <div className="p-3 border-t border-[#1e293b] space-y-2 bg-[#090d16]/70">
-          {/* Quick Effort Trigger */}
-          <button
-            onClick={() => setIsAddEffortModalOpen(true)}
-            className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center justify-center gap-2 transition active:scale-[0.98]"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Log Effort (+Hours)</span>
-          </button>
-
-          {/* Sync Button & Connection Status */}
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => handleSync(true)}
-              disabled={isSyncing}
-              className="flex-1 py-1.5 px-2.5 rounded-lg border border-[#1e293b] bg-[#0d1322] hover:border-blue-500/40 text-[11px] font-mono text-slate-300 flex items-center justify-center gap-2 transition"
-              title="Click to sync with OpenProject"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
-              <span className="truncate">{isSyncing ? 'Syncing...' : lastSyncText}</span>
-            </button>
-
-            {pendingCount > 0 && (
-              <span className="px-2 py-1 rounded-lg bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-mono font-bold" title="Pending offline changes">
-                {pendingCount}
-              </span>
-            )}
-
-            <button
-              onClick={() => setActiveTab('settings')}
-              className="p-1.5 rounded-lg border border-[#1e293b] bg-[#0d1322] text-slate-400 hover:text-white hover:border-slate-600 transition"
-              title="Open Settings"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Switch to Mobile View Toggle Pill */}
-          <button
-            onClick={onSwitchToMobileView}
-            className="w-full py-1.5 px-3 rounded-lg border border-dashed border-[#334155] hover:border-blue-500/60 bg-[#090d16] text-[#94a3b8] hover:text-blue-300 text-[11px] font-mono flex items-center justify-center gap-2 transition"
-            title="Switch to Mobile Frame Layout (for side-panel or testing)"
-          >
-            <Smartphone className="w-3.5 h-3.5 text-blue-400" />
-            <span>Switch to Mobile View</span>
-          </button>
-        </div>
+      <aside className="hidden md:flex w-64 bg-[#0d1322] border-r border-[#1e293b] flex-col shrink-0 z-20">
+        {renderSidebarContent(false)}
       </aside>
 
       {/* ========================================================================= */}
-      {/* 2. MAIN DESKTOP AREA (Header + Content) */}
+      {/* 2. MAIN WEBSITE AREA (Header + Content) */}
       {/* ========================================================================= */}
       <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        {/* Top Desktop App Bar */}
-        <header className="h-14 bg-[#0d1322] border-b border-[#1e293b] px-6 flex items-center justify-between shrink-0 gap-4 z-10">
+        {/* Top App Bar */}
+        <header className="h-14 bg-[#0d1322] border-b border-[#1e293b] px-4 md:px-6 flex items-center justify-between shrink-0 gap-3 z-10">
+          {/* Hamburger button on Mobile */}
+          <button
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="md:hidden p-2 rounded-xl border border-[#1e293b] bg-[#090d16] text-slate-300 hover:text-white transition shrink-0"
+            title="Open navigation menu"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
           {/* Global Search with Debounce & Remote Fallback */}
           <div className="flex-1 max-w-xl relative flex items-center">
             <Search className="w-4 h-4 text-[#64748b] absolute left-3 pointer-events-none" />
@@ -595,15 +660,6 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
               <span className="hidden md:inline">Sync</span>
-            </button>
-
-            {/* Mobile View Toggle */}
-            <button
-              onClick={onSwitchToMobileView}
-              className="p-1.5 rounded-xl border border-[#1e293b] bg-[#090d16] text-[#64748b] hover:text-blue-400 hover:border-blue-500/40 transition"
-              title="Switch to Mobile Frame"
-            >
-              <Smartphone className="w-4 h-4" />
             </button>
 
             {/* Settings */}
@@ -803,9 +859,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             {/* Split View Content Workspace */}
             <div className="flex-1 flex min-h-0 overflow-hidden">
               {/* =============================================================== */}
-              {/* LEFT: High-Density Work Package Table (58% width) */}
+              {/* LEFT: High-Density Work Package Table (100% on mobile, 58% on desktop) */}
               {/* =============================================================== */}
-              <div className="flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16]">
+              <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicketId ? 'hidden lg:flex' : 'flex'}`}>
                 <div className="flex-1 overflow-auto">
                   <table className="w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-[#0d1322] z-10 border-b border-[#1e293b] text-[11px] font-mono text-[#64748b] uppercase tracking-wider">
@@ -945,9 +1001,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               </div>
 
               {/* =============================================================== */}
-              {/* RIGHT: Live Work Package Detail Inspector (42% width) */}
+              {/* RIGHT: Live Work Package Detail Inspector */}
               {/* =============================================================== */}
-              <div className="w-[42%] min-w-[360px] max-w-[620px] bg-[#0c1220] flex flex-col h-full overflow-hidden border-l border-[#1e293b]">
+              <div className={`${selectedTicketId ? 'flex' : 'hidden lg:flex'} flex-1 lg:flex-none lg:w-[42%] lg:min-w-[360px] lg:max-w-[620px] bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b]`}>
                 {!selectedTicket ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748b]">
                     <div className="w-16 h-16 rounded-2xl bg-[#1e293b]/40 flex items-center justify-center mb-4 text-[#94a3b8]">
@@ -964,6 +1020,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     <div className="p-4 border-b border-[#1e293b] bg-[#0d1322] shrink-0">
                       <div className="flex items-center justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2">
+                          {/* Back button for Mobile */}
+                          <button
+                            onClick={() => setSelectedTicketId(null)}
+                            className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-white hover:bg-[#1e293b] rounded-lg transition"
+                            title="Back to Work Packages"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
                           <span className="font-mono text-xs font-bold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-lg border border-blue-500/20">
                             #{selectedTicket.id}
                           </span>
@@ -980,8 +1044,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={handleCopyLink}
-                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-slate-600 text-slate-400 hover:text-white transition"
-                            title="Copy OpenProject URL"
+                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-white hover:border-slate-600 transition"
+                            title={copiedId ? 'Copied URL!' : 'Copy ticket link'}
                           >
                             {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                           </button>
@@ -990,15 +1054,15 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             href={`${opUrl.replace(/\/+$/, '')}/work_packages/${selectedTicket.id}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-blue-500/50 text-slate-400 hover:text-blue-400 transition"
-                            title="Open in OpenProject"
+                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-blue-400 hover:border-blue-500/40 transition"
+                            title="Open in OpenProject web"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </a>
 
                           <button
                             onClick={(e) => handleToggleStar(e, selectedTicket.id)}
-                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-amber-500/50 text-slate-400 hover:text-amber-400 transition"
+                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-amber-500/50 text-[#94a3b8] hover:text-amber-400 transition"
                             title={selectedTicket.starred ? 'Starred' : 'Star for daily access'}
                           >
                             <Star className={`w-3.5 h-3.5 ${selectedTicket.starred ? 'text-amber-400 fill-current' : ''}`} />
@@ -1006,8 +1070,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
 
                           <button
                             onClick={() => setSelectedTicketId(null)}
-                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] hover:border-slate-600 text-slate-400 hover:text-white transition"
-                            title="Close Inspector"
+                            className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#64748b] hover:text-white hover:border-slate-600 transition"
+                            title="Close inspector"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
