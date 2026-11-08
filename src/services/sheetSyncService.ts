@@ -175,6 +175,7 @@ export const sheetSyncService = {
       const payload = {
         action: 'SYNC_ALL',
         opUrl: creds.url,
+        opApiKey: creds.apiKey,
         timestamp: new Date().toISOString(),
         currentUser: data.currentUser,
         projects: data.projects,
@@ -248,6 +249,132 @@ export const sheetSyncService = {
     } catch (err: any) {
       console.warn('[SheetSync] restoreFromSheet failed:', err);
       return { success: false, message: err.message || 'Failed to restore from Google Sheet' };
+    }
+  },
+
+  /**
+   * Intelligently merges data between local IndexedDB and Google Sheet:
+   * - Pulls any new efforts logged on the other device (phone / laptop) and adds them to local IndexedDB.
+   * - Pushes any local efforts that aren't yet in Google Sheet.
+   * - Restores/merges tickets and custom saved views.
+   * - Restores OpenProject server credentials if missing locally.
+   */
+  async mergeWithSheet(): Promise<{ success: boolean; message?: string; newEffortsCount?: number }> {
+    const sheetUrl = this.getSheetUrl();
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) {
+      return { success: false, message: validation.error };
+    }
+
+    try {
+      const json = await sendToAppsScript(validation.cleanUrl, 'GET');
+      if (json.status !== 'SUCCESS' || !json.data) {
+        throw new Error(json.message || 'Invalid response from Google Sheet');
+      }
+
+      const payload: SheetBackupData & { opConfig?: { url: string; apiKey?: string } } = json.data;
+
+      // 1. Merge Efforts (Bidirectional Cloud Sync)
+      const localEfforts = await db.getAllEfforts();
+      const localEffortMap = new Map<string, LocalEffort>();
+      localEfforts.forEach(e => localEffortMap.set(e.id, e));
+
+      let newEffortsCount = 0;
+      const effortsToInsert: LocalEffort[] = [];
+
+      if (payload.efforts && payload.efforts.length > 0) {
+        for (const remoteEff of payload.efforts) {
+          if (!localEffortMap.has(remoteEff.id)) {
+            effortsToInsert.push(remoteEff);
+            newEffortsCount++;
+          }
+        }
+      }
+
+      if (effortsToInsert.length > 0) {
+        await db.putEfforts(effortsToInsert);
+      }
+
+      // 2. Restore credentials if missing locally (e.g. on mobile setup)
+      const currentCreds = await OpenProjectService.getCredentials();
+      if (!currentCreds.apiKey && payload.opConfig?.apiKey) {
+        await OpenProjectService.saveCredentials(payload.opConfig.url || currentCreds.url, payload.opConfig.apiKey);
+      }
+
+      // 3. Merge Tickets
+      if (payload.tickets && payload.tickets.length > 0) {
+        const localTickets = await db.getAllTickets();
+        if (localTickets.length === 0) {
+          await db.putTickets(payload.tickets);
+        } else {
+          const localTicketMap = new Map(localTickets.map(t => [t.id, t]));
+          const missingTickets = payload.tickets.filter(t => !localTicketMap.has(t.id));
+          if (missingTickets.length > 0) {
+            await db.putTickets(missingTickets);
+          }
+        }
+      }
+
+      // 4. Merge Saved Views
+      if (payload.views && payload.views.length > 0) {
+        const localViews = await db.getSavedViews();
+        const localViewIds = new Set(localViews.map(v => v.id));
+        const newViews = payload.views.filter(v => !localViewIds.has(v.id));
+        if (newViews.length > 0) {
+          for (const v of newViews) {
+            await db.putSavedView(v);
+          }
+        }
+      }
+
+      // 5. Update Static Metadata if missing
+      if (payload.projects && payload.projects.length > 0) {
+        const localP = await db.getMeta('projects');
+        if (!localP) await db.setMeta('projects', payload.projects);
+      }
+      if (payload.statuses && payload.statuses.length > 0) {
+        const localS = await db.getStatuses();
+        if (localS.length === 0) await db.putStatuses(payload.statuses);
+      }
+      if (payload.types && payload.types.length > 0) {
+        const localT = await db.getTypes();
+        if (localT.length === 0) await db.putTypes(payload.types);
+      }
+      if (payload.currentUser) {
+        const localUser = await db.getMeta('currentUser');
+        if (!localUser) await db.setMeta('currentUser', payload.currentUser);
+      }
+
+      // 6. Push local efforts to Sheet if local has items not in Sheet
+      const sheetEffortIds = new Set((payload.efforts || []).map(e => e.id));
+      const hasUnuploadedEfforts = localEfforts.some(e => !sheetEffortIds.has(e.id));
+      if (hasUnuploadedEfforts) {
+        const freshEfforts = await db.getAllEfforts();
+        const freshTickets = await db.getAllTickets();
+        const freshProjects = (await db.getMeta<{ id: string; name: string }[]>('projects')) || [];
+        const freshStatuses = await db.getStatuses();
+        const freshTypes = await db.getTypes();
+        const freshViews = await db.getSavedViews();
+        const freshUser = (await db.getMeta<{ id: string; name: string }>('currentUser')) || { id: '', name: '' };
+
+        await this.syncAllToSheet({
+          projects: freshProjects,
+          statuses: freshStatuses,
+          types: freshTypes,
+          views: freshViews,
+          tickets: freshTickets,
+          efforts: freshEfforts,
+          currentUser: freshUser
+        });
+      }
+
+      const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      this.setLastSyncTime(nowStr);
+
+      return { success: true, newEffortsCount };
+    } catch (err: any) {
+      console.warn('[SheetSync] mergeWithSheet failed:', err);
+      return { success: false, message: err.message || 'Failed to sync with Google Sheet' };
     }
   },
 

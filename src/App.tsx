@@ -217,43 +217,29 @@ export default function App() {
         setLastSyncText('Local DB');
       }
 
-      // If local cache was completely cleared (zero tickets) but Google Sheet is configured,
-      // auto-fetch and restore all static and dynamic data from the sheet!
+      // Dual-Sync Cloud Database: Auto-merge latest efforts, tickets, and views from Google Sheet
       const sheetUrl = sheetSyncService.getSheetUrl();
-      if (allTickets.length === 0 && sheetUrl) {
-        sheetSyncService.restoreFromSheet().then((res) => {
-          if (res.success && res.data) {
-            if (res.data.tickets && res.data.tickets.length > 0) setTickets(res.data.tickets);
-            if (res.data.projects && res.data.projects.length > 0) setProjectsList(res.data.projects);
-            if (res.data.statuses && res.data.statuses.length > 0) setStatuses(res.data.statuses);
-            if (res.data.types && res.data.types.length > 0) setTypes(res.data.types);
-            if (res.data.views && res.data.views.length > 0) {
-              setSavedViews(res.data.views);
-              const sheetDefault = res.data.views.find((v: SavedView) => v.isDefault) || res.data.views[0];
-              if (sheetDefault) {
-                setActiveViewId(sheetDefault.id);
-                const f = sheetDefault.filters;
-                setFilterStatusCategory(f.statusCategory || 'all');
-                if (f.statusIds && f.statusIds.length > 0) setFilterStatuses(f.statusIds);
-                else if (f.statusId) setFilterStatuses([f.statusId]);
-                else setFilterStatuses([]);
-
-                if (f.projects && f.projects.length > 0) setFilterProjects(f.projects);
-                else if (f.project) setFilterProjects([f.project]);
-                else if (f.projectId) setFilterProjects([f.projectId]);
-                else setFilterProjects([]);
-
-                setFilterType(f.type || '');
-                setFilterAssignee(f.assignee || '');
-                setFilterPriority(f.priority || '');
-                setFilterStarredOnly(!!f.starredOnly);
-                setSortBy(f.sortBy || 'updated_desc');
-              }
-            }
-            if (res.data.efforts && res.data.efforts.length > 0) setAllEfforts(res.data.efforts);
-            if (res.data.currentUser) setCurrentUser(res.data.currentUser);
+      if (sheetUrl) {
+        sheetSyncService.mergeWithSheet().then(async (res) => {
+          if (res.success) {
             setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
-            showEphemeralNotice('Restored data from Google Sheet backup');
+            if ((res.newEffortsCount || 0) > 0) {
+              const freshEfforts = await db.getAllEfforts();
+              setAllEfforts(freshEfforts);
+              showEphemeralNotice(`Synced ${res.newEffortsCount} efforts from Google Sheet cloud`);
+            }
+            if (allTickets.length === 0) {
+              const freshTickets = await db.getAllTickets();
+              if (freshTickets.length > 0) setTickets(freshTickets);
+              const freshProjects = await db.getMeta<{ id: string; name: string }[]>('projects');
+              if (freshProjects) setProjectsList(freshProjects);
+              const freshStatuses = await db.getStatuses();
+              if (freshStatuses.length > 0) setStatuses(freshStatuses);
+              const freshTypes = await db.getTypes();
+              if (freshTypes.length > 0) setTypes(freshTypes);
+              const freshViews = await db.getSavedViews();
+              if (freshViews.length > 0) setSavedViews(freshViews);
+            }
           }
         }).catch(() => {});
       }
@@ -269,14 +255,27 @@ export default function App() {
 
     try {
       const res = await syncService.syncAll();
+
+      // Cloud database sync: merge with Google Sheet
+      if (sheetSyncService.getSheetUrl()) {
+        try {
+          const sheetRes = await sheetSyncService.mergeWithSheet();
+          if (sheetRes.success) {
+            setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
+          }
+        } catch (e) {
+          console.warn('[Sync] Google Sheet merge notice:', e);
+        }
+      }
+
       await loadLocalData();
 
       if (res.success) {
         setLastSyncText('Just now');
-        if (showNotice) showEphemeralNotice('Synced with OpenProject');
+        if (showNotice) showEphemeralNotice('Synced with OpenProject & Google Sheet');
       } else if (res.reason === 'OFFLINE') {
         setLastSyncText('Offline (Local)');
-        if (showNotice) showEphemeralNotice('Offline - using Local DB');
+        if (showNotice) showEphemeralNotice('Offline - using Local DB & Sheet');
       } else if (res.reason === 'NO_CREDENTIALS') {
         setLastSyncText('Set API Key');
       }

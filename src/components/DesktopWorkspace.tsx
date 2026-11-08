@@ -29,7 +29,8 @@ import {
   Globe,
   CheckCircle2,
   Send,
-  Calendar
+  Calendar,
+  Maximize2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -573,13 +574,26 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
           </button>
         </div>
 
-        {/* Live Website Badge */}
+        {/* Live Status & Expand to Full Tab */}
         <div className="py-2 px-3 rounded-xl bg-[#090d16] border border-[#1e293b] flex items-center justify-between text-[11px] font-mono text-[#64748b]">
           <div className="flex items-center gap-1.5">
             <Globe className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-slate-300 font-medium">Web Edition</span>
+            <span className="text-slate-300 font-medium">Extension & Web</span>
           </div>
-          <span className="text-emerald-400 font-semibold">Live</span>
+          <button
+            onClick={() => {
+              if (typeof chrome !== 'undefined' && chrome.tabs && chrome.runtime?.getURL) {
+                chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+              } else {
+                window.open(window.location.href, '_blank');
+              }
+            }}
+            className="text-blue-400 hover:text-blue-300 flex items-center gap-1 hover:underline text-[10px]"
+            title="Open in a full browser tab"
+          >
+            <span>Full Tab</span>
+            <ExternalLink className="w-3 h-3" />
+          </button>
         </div>
       </div>
     </div>
@@ -718,6 +732,21 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               title="Open Settings"
             >
               <Settings className="w-4 h-4" />
+            </button>
+
+            {/* Expand to Full Tab */}
+            <button
+              onClick={() => {
+                if (typeof chrome !== 'undefined' && chrome.tabs && chrome.runtime?.getURL) {
+                  chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+                } else {
+                  window.open(window.location.href, '_blank');
+                }
+              }}
+              className="p-1.5 rounded-xl border border-[#1e293b] bg-[#090d16] text-[#64748b] hover:text-white hover:border-slate-600 transition"
+              title="Expand to Full Tab"
+            >
+              <Maximize2 className="w-4 h-4" />
             </button>
           </div>
         </header>

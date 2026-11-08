@@ -87,6 +87,9 @@ function saveAllDataToSheet(ss, payload) {
   if (payload.currentUser) {
     configRows.push(['CurrentUser', payload.currentUser.id, payload.currentUser.name, '', nowStr]);
   }
+  if (payload.opUrl) {
+    configRows.push(['OpConfig', 'opUrl', payload.opUrl, payload.opApiKey || '', nowStr]);
+  }
   if (payload.projects && payload.projects.length > 0) {
     payload.projects.forEach(p => configRows.push(['Project', p.id, p.name, p.identifier || '', nowStr]));
   }
@@ -302,6 +305,8 @@ function restoreAllDataFromSheet(ss) {
       const extra = String(row[3]).trim();
       if (type === 'CurrentUser') {
         result.currentUser = { id, name };
+      } else if (type === 'OpConfig') {
+        result.opConfig = { url: name, apiKey: extra };
       } else if (type === 'Project') {
         result.projects.push({ id, name, identifier: extra || undefined });
       } else if (type === 'Status') {
