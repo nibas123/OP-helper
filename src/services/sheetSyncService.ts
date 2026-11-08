@@ -419,6 +419,24 @@ export const sheetSyncService = {
   },
 
   /**
+   * Asynchronously deletes an effort entry from Google Sheet without blocking UI.
+   */
+  async deleteEffortAsync(effortId: string): Promise<void> {
+    const sheetUrl = this.getSheetUrl();
+    const validation = validateSheetUrl(sheetUrl);
+    if (!validation.valid) return;
+
+    try {
+      await sendToAppsScript(validation.cleanUrl, 'POST', {
+        action: 'DELETE_EFFORT',
+        id: effortId
+      });
+    } catch (e) {
+      console.warn('[SheetSync] Background delete effort from sheet failed:', e);
+    }
+  },
+
+  /**
    * Asynchronously posts a saved view to Google Sheet.
    */
   async saveViewAsync(view: SavedView): Promise<void> {

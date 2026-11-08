@@ -49,6 +49,8 @@ function doPost(e) {
       syncSingleTicketToAssignedSheet(ss, payload.ticket, payload.currentUser, payload.opUrl);
     } else if (action === 'SAVE_VIEW') {
       saveViewToSheet(ss, payload.view);
+    } else if (action === 'DELETE_EFFORT') {
+      deleteEffortFromSheet(ss, payload.id);
     } else if (action === 'GET_ALL') {
       const data = restoreAllDataFromSheet(ss);
       return ContentService.createTextOutput(JSON.stringify({ status: 'SUCCESS', data: data }))
@@ -239,14 +241,14 @@ function syncSingleTicketToAssignedSheet(ss, ticket, currentUser, opUrl) {
 }
 
 // -----------------------------------------------------------------------------
-// APPEND EFFORT (SINGLE LOG)
+// APPEND OR UPDATE EFFORT (UPSERT)
 // -----------------------------------------------------------------------------
 function appendEffortToSheet(ss, effort, currentUser) {
   if (!effort) return;
   const sheet = getOrCreateSheet(ss, 'Efforts_Log', [
     'Log ID', 'Date', 'Ticket #', 'Subject', 'Hours', 'User', 'Comment', 'Synced At'
   ]);
-  sheet.appendRow([
+  const rowData = [
     effort.id,
     effort.spentOn || new Date().toISOString().split('T')[0],
     effort.workPackageId || '',
@@ -255,7 +257,29 @@ function appendEffortToSheet(ss, effort, currentUser) {
     currentUser ? currentUser.name : 'Nibas Nazeem',
     effort.comment || '',
     new Date().toLocaleString()
-  ]);
+  ];
+
+  if (sheet.getLastRow() > 1) {
+    const finder = sheet.getRange("A:A").createTextFinder(String(effort.id)).matchEntireCell(true);
+    const match = finder.findNext();
+    if (match) {
+      sheet.getRange(match.getRow(), 1, 1, rowData.length).setValues([rowData]);
+      return;
+    }
+  }
+  sheet.appendRow(rowData);
+}
+
+function deleteEffortFromSheet(ss, effortId) {
+  if (!effortId) return;
+  const sheet = ss.getSheetByName('Efforts_Log');
+  if (sheet && sheet.getLastRow() > 1) {
+    const finder = sheet.getRange("A:A").createTextFinder(String(effortId)).matchEntireCell(true);
+    const match = finder.findNext();
+    if (match) {
+      sheet.deleteRow(match.getRow());
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------

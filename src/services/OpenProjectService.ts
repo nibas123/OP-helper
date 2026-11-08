@@ -300,6 +300,12 @@ export const OpenProjectService = {
     return response.data;
   },
 
+  getWorkPackageActivities: async (id: number | string) => {
+    const client = await getApiClient();
+    const response = await client.get(`/work_packages/${id}/activities`);
+    return response.data;
+  },
+
   uploadAttachment: async (workPackageId: number | string, file: File) => {
     const client = await getApiClient();
     const formData = new FormData();

@@ -22,5 +22,14 @@ export function preprocessOpenProjectMarkdown(content?: string): string {
   // Strip wrapping <figure> tags from CKEditor 5
   processed = processed.replace(/<\/?figure\b[^>]*>/gi, '');
 
+  // Fix escaped underscores in OpenProject URLs (e.g. work\_packages -> work_packages)
+  processed = processed.replace(/work\\_packages/gi, 'work_packages');
+  processed = processed.replace(/(https?:\/\/[^\s<]+)/gi, (url) => url.replace(/\\_/g, '_'));
+
+  // Convert bare URLs into markdown links so they are always clickable
+  processed = processed.replace(/(^|[\s\n])(https?:\/\/[^\s<)]+)/g, (_match, prefix, url) => {
+    return `${prefix}[${url}](${url})`;
+  });
+
   return processed;
 }

@@ -100,12 +100,22 @@ export default function App() {
   const [filterProjects, setFilterProjects] = useState<string[]>([]); // Multiple selected projects
   const [filterStatuses, setFilterStatuses] = useState<string[]>([]); // Multiple selected status IDs
   const [filterStatusCategory, setFilterStatusCategory] = useState<'all' | 'open' | 'closed'>('open');
-  const [filterType, setFilterType] = useState<string>('');
-  const [filterAssignee, setFilterAssignee] = useState<string>(''); // 'all' | 'me' | 'unassigned' | specific ID
-  const [filterPriority, setFilterPriority] = useState<string>('');
+  const [filterTypes, setFilterTypes] = useState<string[]>([]); // Multiple selected types
+  const [filterAssignees, setFilterAssignees] = useState<string[]>([]); // Multiple selected assignees
+  const [filterPriorities, setFilterPriorities] = useState<string[]>([]); // Multiple selected priorities
   const [filterStarredOnly, setFilterStarredOnly] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority'>('updated_desc');
   const [effortSearchQuery, setEffortSearchQuery] = useState('');
+
+  // Activities & Comments state
+  const [ticketActivities, setTicketActivities] = useState<{
+    id: number;
+    userName: string;
+    createdAt: string;
+    commentRaw: string;
+    details: string[];
+  }[]>([]);
+  const [isLoadingActivities, setIsLoadingActivities] = useState(false);
 
   // Direct Add Effort Modal (search ticket by number & log effort popup)
   const [isAddEffortModalOpen, setIsAddEffortModalOpen] = useState(false);
@@ -196,9 +206,9 @@ export default function App() {
         else if (f.projectId) setFilterProjects([f.projectId]);
         else setFilterProjects([]);
 
-        setFilterType(f.type || '');
-        setFilterAssignee(f.assignee || '');
-        setFilterPriority(f.priority || '');
+        setFilterTypes(f.types && f.types.length > 0 ? f.types : (f.type ? [f.type] : []));
+        setFilterAssignees(f.assignees && f.assignees.length > 0 ? f.assignees : (f.assignee ? [f.assignee] : []));
+        setFilterPriorities(f.priorities && f.priorities.length > 0 ? f.priorities : (f.priority ? [f.priority] : []));
         setFilterStarredOnly(!!f.starredOnly);
         setSortBy(f.sortBy || 'updated_desc');
       }
@@ -325,12 +335,33 @@ export default function App() {
       setLastSyncText('Offline');
     };
 
+    // Auto-sync between devices (phone ↔ laptop) on focus or tab visibility
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        const currentSheet = sheetSyncService.getSheetUrl();
+        if (currentSheet) {
+          sheetSyncService.mergeWithSheet().then(res => {
+            if (res.newEffortsCount && res.newEffortsCount > 0) {
+              loadLocalData();
+              setSheetLastSyncTime(new Date().toLocaleTimeString());
+            }
+          }).catch(console.error);
+        }
+      }
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    const periodicSyncTimer = setInterval(handleVisibilityOrFocus, 120000); // Poll every 2m
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      clearInterval(periodicSyncTimer);
     };
   }, []);
 
@@ -1076,11 +1107,40 @@ export default function App() {
     return { spentHours, estimatedHours, mySpentHours, percent, remainingHours };
   }, [selectedTicket, ticketEffortsList, allEfforts, currentUser]);
 
+  const fetchTicketActivities = async (ticketId: number) => {
+    setIsLoadingActivities(true);
+    try {
+      const data = await OpenProjectService.getWorkPackageActivities(ticketId);
+      const elements = data?._embedded?.elements || [];
+      const parsed = elements.map((elem: any) => {
+        const userName = elem._links?.user?.title || elem.user?.name || 'User';
+        const commentRaw = elem.comment?.raw || '';
+        const details = Array.isArray(elem.details)
+          ? elem.details.map((d: any) => typeof d === 'string' ? d : (d.raw || d.html || '')).filter(Boolean)
+          : [];
+        return {
+          id: elem.id,
+          userName,
+          createdAt: elem.createdAt,
+          commentRaw,
+          details
+        };
+      }).filter((item: any) => item.commentRaw || item.details.length > 0);
+      setTicketActivities(parsed);
+    } catch (err) {
+      console.warn('Failed to load activities:', err);
+      setTicketActivities([]);
+    } finally {
+      setIsLoadingActivities(false);
+    }
+  };
+
   // Automatically fetch up-to-date ticket details and time entries when a ticket is opened
   useEffect(() => {
     if (!selectedTicketId) {
       setTicketEffortsList([]);
       setIsLoadingTicketEfforts(false);
+      setTicketActivities([]);
       return;
     }
 
@@ -1153,6 +1213,9 @@ export default function App() {
         if (isMounted) setIsLoadingTicketEfforts(false);
       });
 
+    // 3. Fetch activities & comments
+    fetchTicketActivities(selectedTicketId);
+
     return () => {
       isMounted = false;
     };
@@ -1161,7 +1224,30 @@ export default function App() {
   // Search filter for Add Effort Ticket Picker
   const effortTicketSearchResults = useMemo(() => {
     const raw = effortTicketSearch.trim();
-    if (!raw) return tickets.slice(0, 8);
+    if (!raw) {
+      // Under Log Time and Effort, the list of tracked tickets should be displayed
+      const trackedIds = Array.from(new Set(allEfforts.map(e => e.workPackageId)));
+      const trackedTickets = trackedIds.map(id => {
+        const found = tickets.find(t => t.id === id);
+        if (found) return found;
+        const eff = allEfforts.find(e => e.workPackageId === id);
+        return {
+          id,
+          subject: eff?.ticketSubject || `Ticket #${id}`,
+          project: 'Tracked Work Package',
+          status: 'Tracked',
+          priority: 'Normal',
+          assignee: 'You',
+          spentTime: '',
+          estimatedTime: '',
+          lockVersion: 1,
+          updatedAt: new Date().toISOString(),
+          pendingSync: false
+        } as LocalTicket;
+      });
+      return trackedTickets.length > 0 ? trackedTickets : tickets.slice(0, 15);
+    }
+
     const extractedId = extractTicketIdFromUrlOrText(raw);
     const cleanId = raw.replace(/^#/, '').toLowerCase();
     const q = raw.toLowerCase();
@@ -1182,7 +1268,7 @@ export default function App() {
     });
 
     return Array.from(map.values()).slice(0, 20);
-  }, [tickets, effortTicketSearch, effortRemoteSearchResults]);
+  }, [tickets, allEfforts, effortTicketSearch, effortRemoteSearchResults]);
 
   // --- Saved Views Activation & Application ---
   const applySavedView = (view: SavedView) => {
@@ -1208,9 +1294,9 @@ export default function App() {
       setFilterProjects([]);
     }
 
-    setFilterType(f.type || '');
-    setFilterAssignee(f.assignee || '');
-    setFilterPriority(f.priority || '');
+    setFilterTypes(f.type ? [f.type] : []);
+    setFilterAssignees(f.assignee ? [f.assignee] : []);
+    setFilterPriorities(f.priority ? [f.priority] : []);
     setFilterStarredOnly(!!f.starredOnly);
     setSortBy(f.sortBy || 'updated_desc');
 
@@ -1232,9 +1318,12 @@ export default function App() {
         statusCategory: filterStatusCategory,
         statusIds: filterStatuses.length > 0 ? filterStatuses : undefined,
         projects: filterProjects.length > 0 ? filterProjects : undefined,
-        type: filterType || undefined,
-        assignee: filterAssignee || undefined,
-        priority: filterPriority || undefined,
+        types: filterTypes.length > 0 ? filterTypes : undefined,
+        type: filterTypes[0] || undefined,
+        assignees: filterAssignees.length > 0 ? filterAssignees : undefined,
+        assignee: filterAssignees[0] || undefined,
+        priorities: filterPriorities.length > 0 ? filterPriorities : undefined,
+        priority: filterPriorities[0] || undefined,
         starredOnly: filterStarredOnly,
         sortBy: sortBy
       }
@@ -1260,6 +1349,8 @@ export default function App() {
   const filteredTickets = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     const extractedId = extractTicketIdFromUrlOrText(searchQuery);
+
+    const normalizeText = (text: string) => text.toLowerCase().replace(/[\s\-_]+/g, '');
 
     const result = tickets.filter(t => {
       // If user searched for an exact ticket ID or URL, match it directly
@@ -1291,51 +1382,67 @@ export default function App() {
         if (!matchStatus) return false;
       } else {
         // Status Category (Open vs Closed in OP)
-        if (filterStatusCategory === 'open') {
-          const isClosed = closedStatusIds.has(String(t.statusId)) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
-          if (isClosed) return false;
-        } else if (filterStatusCategory === 'closed') {
-          const isClosed = closedStatusIds.has(String(t.statusId)) || ['closed', 'tested', 'rejected'].includes(t.status.toLowerCase());
-          if (!isClosed) return false;
+        const sName = (t.status || '').toLowerCase().trim();
+        const isOpenStatus = ['new', 'in progress', 'assigned', 'reopened', 'feedback', 'scheduled', 'developing', 'in development'].includes(sName);
+        const isClosed = (!isOpenStatus) && (closedStatusIds.has(String(t.statusId)) || ['closed', 'tested', 'rejected', 'resolved'].includes(sName));
+
+        if (filterStatusCategory === 'open' && isClosed) {
+          return false;
+        } else if (filterStatusCategory === 'closed' && !isClosed) {
+          return false;
         }
       }
 
-      // 4. Multiple Projects Filter
+      // 4. Multiple Projects Filter (Robust Fuzzy + ID matching)
       if (filterProjects.length > 0) {
-        const matchProject = filterProjects.some(p => 
-          t.project.toLowerCase() === p.toLowerCase() ||
-          String(t.projectId) === String(p) ||
-          (resolveProjectId(p) && String(t.projectId) === String(resolveProjectId(p)))
-        );
+        const matchProject = filterProjects.some(p => {
+          if (String(t.projectId) === String(p)) return true;
+          if (t.project.toLowerCase() === p.toLowerCase()) return true;
+          const normTicketProj = normalizeText(t.project);
+          const normFilterProj = normalizeText(p);
+          if (normTicketProj === normFilterProj) return true;
+          if (normTicketProj.length > 5 && normFilterProj.length > 5) {
+            if (normTicketProj.includes(normFilterProj) || normFilterProj.includes(normTicketProj)) return true;
+          }
+          const resolved = resolveProjectId(p);
+          if (resolved && String(t.projectId) === String(resolved)) return true;
+          return false;
+        });
         if (!matchProject) return false;
       }
 
-      // 5. Type Filter
-      if (filterType) {
-        const matchType = String(t.typeId) === String(filterType) || (t.type && t.type.toLowerCase() === filterType.toLowerCase());
+      // 5. Types Filter (Multi-Select)
+      if (filterTypes.length > 0) {
+        const matchType = filterTypes.some(ft => 
+          String(t.typeId) === String(ft) || 
+          (t.type && t.type.toLowerCase() === ft.toLowerCase())
+        );
         if (!matchType) return false;
       }
 
-      // 6. Assignee Filter
-      if (filterAssignee) {
-        if (filterAssignee === 'me') {
-          const isMe = (currentUser?.id && String(t.assigneeId) === String(currentUser.id)) || 
-                       t.assignee.toLowerCase() === 'me' || 
-                       (currentUser?.name && t.assignee.toLowerCase() === currentUser.name.toLowerCase()) ||
-                       (currentUser?.name && t.assignee.toLowerCase().includes(currentUser.name.toLowerCase())) ||
-                       t.assignee.toLowerCase().includes('nibas');
-          if (!isMe) return false;
-        } else if (filterAssignee === 'unassigned') {
-          if (t.assignee && t.assignee.toLowerCase() !== 'unassigned' && t.assignee.trim() !== '') return false;
-        } else {
-          const matchAssignee = String(t.assigneeId) === String(filterAssignee) || t.assignee.toLowerCase() === filterAssignee.toLowerCase();
-          if (!matchAssignee) return false;
-        }
+      // 6. Assignees Filter (Multi-Select)
+      if (filterAssignees.length > 0) {
+        const matchAssignee = filterAssignees.some(fa => {
+          if (fa === 'me') {
+            return (currentUser?.id && String(t.assigneeId) === String(currentUser.id)) || 
+                   t.assignee.toLowerCase() === 'me' || 
+                   (currentUser?.name && t.assignee.toLowerCase().includes(currentUser.name.toLowerCase())) ||
+                   t.assignee.toLowerCase().includes('nibas');
+          }
+          if (fa === 'unassigned') {
+            return !t.assignee || t.assignee.toLowerCase() === 'unassigned' || t.assignee.trim() === '';
+          }
+          return String(t.assigneeId) === String(fa) || t.assignee.toLowerCase() === fa.toLowerCase();
+        });
+        if (!matchAssignee) return false;
       }
 
-      // 7. Priority Filter
-      if (filterPriority) {
-        const matchPriority = String(t.priorityId) === String(filterPriority) || t.priority.toLowerCase() === filterPriority.toLowerCase();
+      // 7. Priorities Filter (Multi-Select)
+      if (filterPriorities.length > 0) {
+        const matchPriority = filterPriorities.some(fp =>
+          String(t.priorityId) === String(fp) ||
+          t.priority.toLowerCase() === fp.toLowerCase()
+        );
         if (!matchPriority) return false;
       }
 
@@ -1372,24 +1479,24 @@ export default function App() {
     filterStatuses, 
     filterProjects, 
     resolveProjectId, 
-    filterType, 
-    filterAssignee, 
+    filterTypes, 
+    filterAssignees, 
     currentUser, 
-    filterPriority, 
+    filterPriorities, 
     sortBy
   ]);
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (filterProjects.length > 0) count++;
-    if (filterStatusCategory !== 'all') count++;
+    if (filterStatusCategory !== 'open') count++;
     if (filterStatuses.length > 0) count++;
-    if (filterType) count++;
-    if (filterAssignee) count++;
-    if (filterPriority) count++;
+    if (filterTypes.length > 0) count++;
+    if (filterAssignees.length > 0) count++;
+    if (filterPriorities.length > 0) count++;
     if (filterStarredOnly) count++;
     return count;
-  }, [filterProjects, filterStatusCategory, filterStatuses, filterType, filterAssignee, filterPriority, filterStarredOnly]);
+  }, [filterProjects, filterStatusCategory, filterStatuses, filterTypes, filterAssignees, filterPriorities, filterStarredOnly]);
 
   // --- Efforts Calculations & Global Effort Search ---
   const weekDays = useMemo(() => getWorkWeekDays(weekOffset), [weekOffset]);
@@ -1484,9 +1591,9 @@ export default function App() {
     setFilterProjects([]);
     setFilterStatuses([]);
     setFilterStatusCategory('open');
-    setFilterType('');
-    setFilterAssignee('');
-    setFilterPriority('');
+    setFilterTypes([]);
+    setFilterAssignees([]);
+    setFilterPriorities([]);
     setFilterStarredOnly(false);
   };
 
@@ -1509,6 +1616,8 @@ export default function App() {
           selectedTicketStats={selectedTicketStats}
           ticketEffortsList={ticketEffortsList}
           isLoadingTicketEfforts={isLoadingTicketEfforts}
+          ticketActivities={ticketActivities}
+          isLoadingActivities={isLoadingActivities}
           allEfforts={allEfforts}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
@@ -1520,12 +1629,12 @@ export default function App() {
           setFilterStatuses={setFilterStatuses}
           filterStatusCategory={filterStatusCategory}
           setFilterStatusCategory={setFilterStatusCategory}
-          filterType={filterType}
-          setFilterType={setFilterType}
-          filterAssignee={filterAssignee}
-          setFilterAssignee={setFilterAssignee}
-          filterPriority={filterPriority}
-          setFilterPriority={setFilterPriority}
+          filterTypes={filterTypes}
+          setFilterTypes={setFilterTypes}
+          filterAssignees={filterAssignees}
+          setFilterAssignees={setFilterAssignees}
+          filterPriorities={filterPriorities}
+          setFilterPriorities={setFilterPriorities}
           filterStarredOnly={filterStarredOnly}
           setFilterStarredOnly={setFilterStarredOnly}
           sortBy={sortBy}
@@ -1612,6 +1721,7 @@ export default function App() {
             try {
               await OpenProjectService.addComment(String(ticketId), comment, target?.lockVersion ?? 1);
               showEphemeralNotice('Comment posted to OpenProject');
+              await fetchTicketActivities(ticketId);
             } catch (err: any) {
               console.error('Failed to post comment:', err);
               showEphemeralNotice('Failed to post comment');
@@ -1771,14 +1881,34 @@ export default function App() {
                           </div>
 
                           {hasValidTargetId ? (
-                            <button
-                              type="button"
-                              disabled={isFetchingEffortTicket}
-                              onClick={() => fetchTicketForEffort(effortTargetId)}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition shadow-sm"
-                            >
-                              {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Fetch Details'}
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                disabled={isFetchingEffortTicket}
+                                onClick={() => fetchTicketForEffort(effortTargetId)}
+                                className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-mono font-medium flex items-center gap-1.5 transition shadow-sm"
+                              >
+                                {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Fetch Details'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const targetUrl = `${opUrl.replace(/\/$/, '')}/work_packages/${effortTargetId}`;
+                                  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+                                    chrome.tabs.create({ url: targetUrl });
+                                    try { window.close(); } catch(e) {}
+                                  } else {
+                                    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                                    try { window.close(); } catch(e) {}
+                                  }
+                                }}
+                                className="px-3 py-2 bg-[#1e293b] hover:bg-[#283548] text-slate-200 border border-slate-700 rounded-xl text-xs font-mono font-medium flex items-center gap-1.5 transition"
+                                title="Open work package directly in OpenProject tab"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5 text-blue-400" />
+                                <span>Open in OP</span>
+                              </button>
+                            </div>
                           ) : effortTicketSearch.trim().length >= 2 ? (
                             <button
                               type="button"
@@ -1821,24 +1951,58 @@ export default function App() {
                             </div>
                           )}
 
-                          {effortTicketSearchResults.map(t => (
-                            <div
-                              key={t.id}
-                              onClick={() => setEffortSelectedTicket(t)}
-                              className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between"
-                            >
-                              <div className="truncate pr-2">
-                                <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
-                                <span className="text-slate-300 font-medium">{t.subject}</span>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                                  {t.status}
-                                </span>
-                                <span className="text-[10px] font-mono text-[#64748b] truncate max-w-[100px]">{t.project}</span>
-                              </div>
+                          {!effortTicketSearch && (
+                            <div className="px-3 py-1.5 bg-[#0d1322] border-b border-[#1e293b] text-[10px] font-mono text-[#64748b] uppercase tracking-wider flex items-center justify-between">
+                              <span>Tracked Work Packages</span>
+                              <span className="text-emerald-400 font-bold">{effortTicketSearchResults.length} available</span>
                             </div>
-                          ))}
+                          )}
+
+                          {effortTicketSearchResults.map(t => {
+                            const hoursLoggedOnTicket = allEfforts
+                              .filter(e => e.workPackageId === t.id)
+                              .reduce((sum, e) => sum + e.hours, 0);
+                            return (
+                              <div
+                                key={t.id}
+                                onClick={() => setEffortSelectedTicket(t)}
+                                className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between group"
+                              >
+                                <div className="truncate pr-2">
+                                  <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
+                                  <span className="text-slate-300 font-medium">{t.subject}</span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {hoursLoggedOnTicket > 0 && (
+                                    <span className="text-[10px] font-mono font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                                      {hoursLoggedOnTicket.toFixed(1)}h
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                    {t.status}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const targetUrl = `${opUrl.replace(/\/$/, '')}/work_packages/${t.id}`;
+                                      if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+                                        chrome.tabs.create({ url: targetUrl });
+                                        try { window.close(); } catch(err) {}
+                                      } else {
+                                        window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                                        try { window.close(); } catch(err) {}
+                                      }
+                                    }}
+                                    className="p-1 text-[#64748b] hover:text-white opacity-60 group-hover:opacity-100 transition"
+                                    title="Open directly in OpenProject"
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
 
                           {effortTicketSearchResults.length === 0 && !isFetchingEffortTicket && effortTicketSearch && (
                             <div className="p-4 text-center text-xs text-[#64748b] space-y-2">

@@ -66,7 +66,9 @@ export interface ViewFilters {
   type?: string;
   types?: string[];
   assignee?: string; // 'all' | 'me' | 'unassigned' | specific userId/name
+  assignees?: string[];
   priority?: string;
+  priorities?: string[];
   starredOnly?: boolean;
   sortBy?: 'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority';
 }

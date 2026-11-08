@@ -12,7 +12,6 @@ import {
   Plus,
   ArrowUpDown,
   Menu,
-  ChevronDown,
   Trash2,
   Pencil,
   UploadCloud,
@@ -23,14 +22,14 @@ import {
   Bookmark,
   MessageSquare,
   Timer,
-  Flame,
   Copy,
   FileText,
   Globe,
   CheckCircle2,
   Send,
   Calendar,
-  Maximize2
+  Maximize2,
+  ArrowRight
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,6 +38,8 @@ import type { LocalTicket, LocalEffort, LookupItem, SavedView, SyncQueueItem } f
 import { parseDurationToHours } from '../services/syncService';
 import { AuthenticatedImage } from './AuthenticatedImage';
 import { preprocessOpenProjectMarkdown } from '../utils/markdownUtils';
+import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
+import MultiSelect from './MultiSelect';
 
 export interface DesktopWorkspaceProps {
   tickets: LocalTicket[];
@@ -71,6 +72,14 @@ export interface DesktopWorkspaceProps {
     pendingSync?: boolean;
   }[];
   isLoadingTicketEfforts: boolean;
+  ticketActivities?: {
+    id: number;
+    userName: string;
+    createdAt: string;
+    commentRaw: string;
+    details: string[];
+  }[];
+  isLoadingActivities?: boolean;
   allEfforts: LocalEffort[];
   searchQuery: string;
   setSearchQuery: (q: string) => void;
@@ -82,12 +91,18 @@ export interface DesktopWorkspaceProps {
   setFilterStatuses: React.Dispatch<React.SetStateAction<string[]>>;
   filterStatusCategory: 'all' | 'open' | 'closed';
   setFilterStatusCategory: (cat: 'all' | 'open' | 'closed') => void;
-  filterType: string;
-  setFilterType: (type: string) => void;
-  filterAssignee: string;
-  setFilterAssignee: (assignee: string) => void;
-  filterPriority: string;
-  setFilterPriority: (priority: string) => void;
+  filterType?: string;
+  setFilterType?: (type: string) => void;
+  filterTypes?: string[];
+  setFilterTypes?: React.Dispatch<React.SetStateAction<string[]>>;
+  filterAssignee?: string;
+  setFilterAssignee?: (assignee: string) => void;
+  filterAssignees?: string[];
+  setFilterAssignees?: React.Dispatch<React.SetStateAction<string[]>>;
+  filterPriority?: string;
+  setFilterPriority?: (priority: string) => void;
+  filterPriorities?: string[];
+  setFilterPriorities?: React.Dispatch<React.SetStateAction<string[]>>;
   filterStarredOnly: boolean;
   setFilterStarredOnly: React.Dispatch<React.SetStateAction<boolean>>;
   sortBy: 'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority';
@@ -164,6 +179,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     selectedTicketStats,
     ticketEffortsList,
     isLoadingTicketEfforts,
+    ticketActivities = [],
+    isLoadingActivities = false,
     allEfforts,
     searchQuery,
     setSearchQuery,
@@ -171,14 +188,22 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     handleRemoteSearch,
     filterProjects,
     setFilterProjects,
+    filterStatuses,
+    setFilterStatuses,
     filterStatusCategory,
     setFilterStatusCategory,
     filterType,
     setFilterType,
+    filterTypes,
+    setFilterTypes,
     filterAssignee,
     setFilterAssignee,
+    filterAssignees,
+    setFilterAssignees,
     filterPriority,
     setFilterPriority,
+    filterPriorities,
+    setFilterPriorities,
     filterStarredOnly,
     setFilterStarredOnly,
     sortBy,
@@ -229,6 +254,18 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     onSaveSettings
   } = props;
 
+  // Helper to open in full screen / new tab and automatically close side panel
+  const openInFullScreenAndClose = (url: string) => {
+    if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+      chrome.tabs.create({ url }, () => {
+        try { window.close(); } catch(e) {}
+      });
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      try { window.close(); } catch(e) {}
+    }
+  };
+
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'sheet' | 'settings'>('tickets');
   const [inspectorTab, setInspectorTab] = useState<'details' | 'efforts' | 'comments'>('details');
@@ -256,6 +293,68 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   const preprocessedDescription = useMemo(() => {
     return preprocessOpenProjectMarkdown(selectedTicket?.description);
   }, [selectedTicket?.description]);
+
+  // Detected linked work package or production ticket in description (Requirement 3)
+  const linkedWorkPackageMatch = useMemo(() => {
+    if (!selectedTicket?.description) return null;
+    const match = selectedTicket.description.match(/work[\\_]+packages\/(\d+)/i) || 
+                  selectedTicket.description.match(/work_packages\/(\d+)/i);
+    return match ? parseInt(match[1], 10) : null;
+  }, [selectedTicket?.description]);
+
+  // Distinct assignee options for multi-select
+  const allAssigneeOptions = useMemo(() => {
+    const list = [
+      { id: 'me', name: 'Assigned to Me' },
+      { id: 'unassigned', name: 'Unassigned' }
+    ];
+    const seen = new Set(['me', 'unassigned']);
+    tickets.forEach(t => {
+      const aName = (t.assignee || '').trim();
+      if (aName && aName.toLowerCase() !== 'unassigned' && !seen.has(aName)) {
+        seen.add(aName);
+        list.push({ id: aName, name: aName });
+      }
+    });
+    return list;
+  }, [tickets]);
+
+  // Effective multi-select values
+  const effectiveFilterTypes = useMemo(() => {
+    if (filterTypes && filterTypes.length > 0) return filterTypes;
+    return filterType ? [filterType] : [];
+  }, [filterTypes, filterType]);
+
+  const effectiveFilterAssignees = useMemo(() => {
+    if (filterAssignees && filterAssignees.length > 0) return filterAssignees;
+    return filterAssignee ? [filterAssignee] : [];
+  }, [filterAssignees, filterAssignee]);
+
+  const effectiveFilterPriorities = useMemo(() => {
+    if (filterPriorities && filterPriorities.length > 0) return filterPriorities;
+    return filterPriority ? [filterPriority] : [];
+  }, [filterPriorities, filterPriority]);
+
+  // Tracked tickets summary for Effort tab (Requirement 8)
+  const trackedTicketsSummary = useMemo(() => {
+    const map = new Map<number, { id: number; subject: string; project: string; totalHours: number }>();
+    allEfforts.forEach(eff => {
+      const existing = map.get(eff.workPackageId);
+      const hours = eff.hours || 0;
+      if (existing) {
+        existing.totalHours = +(existing.totalHours + hours).toFixed(2);
+      } else {
+        const ticket = tickets.find(t => t.id === eff.workPackageId);
+        map.set(eff.workPackageId, {
+          id: eff.workPackageId,
+          subject: ticket?.subject || eff.ticketSubject || `Ticket #${eff.workPackageId}`,
+          project: ticket?.project || 'Tracked Work Package',
+          totalHours: hours
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.totalHours - a.totalHours);
+  }, [allEfforts, tickets]);
 
   // Project assignees for selected ticket
   const selectedTicketAssignees = useMemo(() => {
@@ -584,6 +683,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             onClick={() => {
               if (typeof chrome !== 'undefined' && chrome.tabs && chrome.runtime?.getURL) {
                 chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+                try { window.close(); } catch(e) {}
               } else {
                 window.open(window.location.href, '_blank');
               }
@@ -642,6 +742,24 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl pl-9 pr-9 py-1.5 text-xs text-slate-200 placeholder-[#64748b] focus:border-blue-500 focus:outline-none transition shadow-inner font-sans"
             />
+            {(() => {
+              const extractedSearchId = extractTicketIdFromUrlOrText(searchQuery) || parseInt(searchQuery.replace(/^#/, ''), 10);
+              const hasSearchTargetId = !isNaN(extractedSearchId) && extractedSearchId > 0;
+              if (hasSearchTargetId) {
+                return (
+                  <button
+                    type="button"
+                    onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/$/, '')}/work_packages/${extractedSearchId}`)}
+                    className="absolute right-16 px-2 py-0.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded text-[10px] font-mono flex items-center gap-1 transition"
+                    title="Open directly in OpenProject tab"
+                  >
+                    <span>Open in OP</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </button>
+                );
+              }
+              return null;
+            })()}
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
@@ -739,6 +857,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               onClick={() => {
                 if (typeof chrome !== 'undefined' && chrome.tabs && chrome.runtime?.getURL) {
                   chrome.tabs.create({ url: chrome.runtime.getURL('index.html') });
+                  try { window.close(); } catch(e) {}
                 } else {
                   window.open(window.location.href, '_blank');
                 }
@@ -756,50 +875,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
         {/* ===================================================================== */}
         {activeTab === 'tickets' && (
           <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Top Bento KPI Summary Cards */}
-            <div className="px-6 py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 shrink-0">
-              <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-blue-500/30 transition">
-                <span className="text-[11px] font-mono text-[#94a3b8] uppercase tracking-wide">Work Packages</span>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-white font-mono">{filteredTickets.length}</span>
-                  <span className="text-[11px] text-[#64748b]">of {tickets.length}</span>
-                </div>
-              </div>
-
-              <div 
-                onClick={() => setFilterStarredOnly(prev => !prev)}
-                className={`p-3 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                  filterStarredOnly 
-                    ? 'bg-amber-500/10 border-amber-500/40' 
-                    : 'bg-[#0f172a] border-[#1e293b] hover:border-amber-500/30'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono text-amber-400 uppercase tracking-wide">Starred (Daily)</span>
-                  <Star className="w-3.5 h-3.5 text-amber-400 fill-current" />
-                </div>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-amber-400 font-mono">{starredTickets.length}</span>
-                  <span className="text-[11px] text-amber-400/60">{filterStarredOnly ? 'Filter Active' : 'Click to filter'}</span>
-                </div>
-              </div>
-
-              <div 
-                onClick={() => setFilterPriority(filterPriority === 'urgent' ? '' : 'urgent')}
-                className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] hover:border-rose-500/30 cursor-pointer flex flex-col justify-between transition"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono text-rose-400 uppercase tracking-wide">Urgent / High</span>
-                  <Flame className="w-3.5 h-3.5 text-rose-400" />
-                </div>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-rose-400 font-mono">
-                    {tickets.filter(t => (t.priority || '').toLowerCase().includes('urgent') || (t.priority || '').toLowerCase().includes('high')).length}
-                  </span>
-                  <span className="text-[11px] text-[#64748b]">tickets</span>
-                </div>
-              </div>
-
+            {/* Top Bento KPI Summary Cards (Requirement 1: Removed Work Packages, Starred Daily, Urgent/High) */}
+            <div className="px-6 py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-1 sm:grid-cols-3 gap-3 shrink-0">
               <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-emerald-500/30 transition">
                 <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today's Effort</span>
                 <div className="flex items-baseline gap-2 mt-1">
@@ -851,64 +928,74 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                   </button>
                 </div>
 
-                {/* Project Filter */}
-                <div className="relative">
-                  <select
-                    value={filterProjects[0] || ''}
-                    onChange={(e) => setFilterProjects(e.target.value ? [e.target.value] : [])}
-                    className="bg-[#090d16] border border-[#1e293b] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:border-blue-500 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[160px] truncate"
-                  >
-                    <option value="">All Projects</option>
-                    {projectsList.map(p => (
-                      <option key={p.id} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#64748b] absolute right-2 top-2.5 pointer-events-none" />
-                </div>
+                {/* Project MultiSelect */}
+                <MultiSelect
+                  label="Project"
+                  options={projectsList.map(p => ({ id: p.name, name: p.name }))}
+                  selected={filterProjects}
+                  onChange={setFilterProjects}
+                  placeholder="All Projects"
+                />
 
-                {/* Type Filter */}
-                <div className="relative">
-                  <select
-                    value={filterType}
-                    onChange={(e) => setFilterType(e.target.value)}
-                    className="bg-[#090d16] border border-[#1e293b] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:border-blue-500 focus:outline-none appearance-none pr-7 cursor-pointer"
-                  >
-                    <option value="">All Types</option>
-                    {types.map(t => (
-                      <option key={t.id} value={t.name}>{t.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#64748b] absolute right-2 top-2.5 pointer-events-none" />
-                </div>
+                {/* Status MultiSelect */}
+                <MultiSelect
+                  label="Status"
+                  options={statuses.map(s => ({ id: String(s.id), name: s.name }))}
+                  selected={filterStatuses}
+                  onChange={setFilterStatuses}
+                  placeholder="All Statuses"
+                />
 
-                {/* Assignee Filter */}
-                <div className="relative">
-                  <select
-                    value={filterAssignee}
-                    onChange={(e) => setFilterAssignee(e.target.value)}
-                    className="bg-[#090d16] border border-[#1e293b] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:border-blue-500 focus:outline-none appearance-none pr-7 cursor-pointer"
-                  >
-                    <option value="">All Assignees</option>
-                    <option value="me">Assigned to Me</option>
-                    <option value="unassigned">Unassigned</option>
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#64748b] absolute right-2 top-2.5 pointer-events-none" />
-                </div>
+                {/* Type MultiSelect */}
+                <MultiSelect
+                  label="Type"
+                  options={types.map(t => ({ id: t.name, name: t.name }))}
+                  selected={effectiveFilterTypes}
+                  onChange={(vals) => {
+                    if (setFilterTypes) setFilterTypes(vals);
+                    else if (setFilterType) setFilterType(vals[0] || '');
+                  }}
+                  placeholder="All Types"
+                />
 
-                {/* Priority Filter */}
-                <div className="relative">
-                  <select
-                    value={filterPriority}
-                    onChange={(e) => setFilterPriority(e.target.value)}
-                    className="bg-[#090d16] border border-[#1e293b] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:border-blue-500 focus:outline-none appearance-none pr-7 cursor-pointer"
-                  >
-                    <option value="">All Priorities</option>
-                    {displayPriorities.map(p => (
-                      <option key={p.id} value={p.name}>{p.name}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-[#64748b] absolute right-2 top-2.5 pointer-events-none" />
-                </div>
+                {/* Assignee MultiSelect */}
+                <MultiSelect
+                  label="Assignee"
+                  options={allAssigneeOptions}
+                  selected={effectiveFilterAssignees}
+                  onChange={(vals) => {
+                    if (setFilterAssignees) setFilterAssignees(vals);
+                    else if (setFilterAssignee) setFilterAssignee(vals[0] || '');
+                  }}
+                  placeholder="All Assignees"
+                />
+
+                {/* Priority MultiSelect */}
+                <MultiSelect
+                  label="Priority"
+                  options={displayPriorities.map(p => ({ id: p.name, name: p.name }))}
+                  selected={effectiveFilterPriorities}
+                  onChange={(vals) => {
+                    if (setFilterPriorities) setFilterPriorities(vals);
+                    else if (setFilterPriority) setFilterPriority(vals[0] || '');
+                  }}
+                  placeholder="All Priorities"
+                />
+
+                {/* Starred Filter Pill */}
+                <button
+                  type="button"
+                  onClick={() => setFilterStarredOnly(prev => !prev)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition cursor-pointer ${
+                    filterStarredOnly
+                      ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 font-bold'
+                      : 'bg-[#090d16] border-[#1e293b] text-slate-300 hover:border-slate-600'
+                  }`}
+                  title={filterStarredOnly ? 'Showing starred only (click to clear)' : 'Filter starred tickets'}
+                >
+                  <Star className={`w-3.5 h-3.5 ${filterStarredOnly ? 'text-amber-400 fill-current' : 'text-slate-400'}`} />
+                  <span>Starred ({starredTickets.length})</span>
+                </button>
 
                 {/* Clear Filters if active */}
                 {activeFilterCount > 0 && (
@@ -1061,15 +1148,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
 
                               {/* External link action */}
                               <td className="py-2.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
-                                <a
-                                  href={`${opUrl.replace(/\/+$/, '')}/work_packages/${ticket.id}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-[#64748b] hover:text-blue-400 transition"
-                                  title="Open in OpenProject web"
+                                <button
+                                  type="button"
+                                  onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${ticket.id}`)}
+                                  className="text-[#64748b] hover:text-blue-400 transition p-1"
+                                  title="Open in OpenProject tab"
                                 >
                                   <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
+                                </button>
                               </td>
                             </tr>
                           );
@@ -1136,15 +1222,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                           </button>
 
-                          <a
-                            href={`${opUrl.replace(/\/+$/, '')}/work_packages/${selectedTicket.id}`}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
+                            onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${selectedTicket.id}`)}
                             className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-blue-400 hover:border-blue-500/40 transition"
-                            title="Open in OpenProject web"
+                            title="Open in OpenProject tab"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
+                          </button>
 
                           <button
                             onClick={(e) => handleToggleStar(e, selectedTicket.id)}
@@ -1259,7 +1344,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             : 'border-transparent text-[#64748b] hover:text-slate-300'
                         }`}
                       >
-                        Activity
+                        Activity ({ticketActivities?.length || 0})
                       </button>
                     </div>
 
@@ -1268,6 +1353,37 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                       {/* TAB 1: Markdown Description */}
                       {inspectorTab === 'details' && (
                         <div className="space-y-4">
+                          {/* Linked Production / Parent Work Package Banner (Requirement 3) */}
+                          {linkedWorkPackageMatch && (
+                            <div className="p-3 bg-blue-950/40 border border-blue-500/30 rounded-xl flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 text-xs text-blue-300 min-w-0">
+                                <FolderKanban className="w-4 h-4 text-blue-400 shrink-0" />
+                                <span className="truncate">
+                                  Linked OP Ticket: <strong className="text-white font-mono">#{linkedWorkPackageMatch}</strong>
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedTicketId(linkedWorkPackageMatch)}
+                                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-mono font-medium transition flex items-center gap-1 shadow-sm"
+                                  title={`Switch to ticket #${linkedWorkPackageMatch} in app`}
+                                >
+                                  <span>View #{linkedWorkPackageMatch}</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${linkedWorkPackageMatch}`)}
+                                  className="p-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-300 hover:text-white rounded-lg transition"
+                                  title="Open in OpenProject tab"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
                           <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300">
                             {preprocessedDescription ? (
                               <ReactMarkdown
@@ -1276,7 +1392,54 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                                 components={{
                                   img: ({ src, alt }) => (
                                     <AuthenticatedImage src={src} alt={alt} onZoom={setZoomedImageUrl} />
-                                  )
+                                  ),
+                                  a: ({ href, children }) => {
+                                    if (!href) return <span>{children}</span>;
+                                    const match = href.match(/work[_]?packages\/(\d+)/i);
+                                    if (match) {
+                                      const targetId = parseInt(match[1], 10);
+                                      return (
+                                        <span className="inline-flex items-center gap-1.5 my-0.5 align-middle">
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedTicketId(targetId);
+                                            }}
+                                            className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 rounded text-xs font-mono font-medium transition cursor-pointer"
+                                            title={`Switch to ticket #${targetId} in app`}
+                                          >
+                                            <span>#{targetId}</span>
+                                            <ArrowRight className="w-3 h-3" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              openInFullScreenAndClose(href);
+                                            }}
+                                            className="text-[#64748b] hover:text-white p-0.5"
+                                            title="Open in OpenProject tab"
+                                          >
+                                            <ExternalLink className="w-3 h-3" />
+                                          </button>
+                                        </span>
+                                      );
+                                    }
+                                    return (
+                                      <a
+                                        href={href}
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          openInFullScreenAndClose(href);
+                                        }}
+                                        className="text-blue-400 hover:underline inline-flex items-center gap-1"
+                                      >
+                                        <span>{children}</span>
+                                        <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                    );
+                                  }
                                 }}
                               >
                                 {preprocessedDescription}
@@ -1382,31 +1545,133 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                         </div>
                       )}
 
-                      {/* TAB 3: Comments & Activity Thread */}
+                      {/* TAB 3: Comments & Activity Thread (Requirement 2) */}
                       {inspectorTab === 'comments' && (
                         <div className="space-y-4">
-                          <form onSubmit={handleInlineCommentSubmit} className="space-y-2">
+                          {/* New Comment / Activity Form */}
+                          <form onSubmit={handleInlineCommentSubmit} className="space-y-2.5 bg-[#090d16] p-3 rounded-xl border border-[#1e293b]">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                                <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+                                <span>Add Activity / Comment</span>
+                              </label>
+                              <span className="text-[10px] font-mono text-[#64748b]">Markdown supported</span>
+                            </div>
                             <textarea
                               rows={3}
                               value={newCommentText}
                               onChange={e => setNewCommentText(e.target.value)}
-                              placeholder="Write a comment or update for this work package..."
-                              className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl p-2.5 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none resize-none"
+                              placeholder="Write a comment or activity update for this work package..."
+                              className="w-full bg-[#0d1322] border border-[#1e293b] rounded-lg p-2.5 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none resize-none"
                             />
                             <div className="flex justify-end">
                               <button
                                 type="submit"
                                 disabled={isSubmittingComment || !newCommentText.trim()}
-                                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5"
+                                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
                               >
-                                <MessageSquare className="w-3.5 h-3.5" />
-                                <span>{isSubmittingComment ? 'Posting...' : 'Post Comment'}</span>
+                                <Send className="w-3 h-3" />
+                                <span>{isSubmittingComment ? 'Posting...' : 'Post Activity'}</span>
                               </button>
                             </div>
                           </form>
-                          <p className="text-xs text-[#64748b] italic">
-                            Comments posted will sync directly to OpenProject work package activity.
-                          </p>
+
+                          {/* Activities Stream */}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-[11px] font-mono uppercase text-[#64748b] tracking-wider">
+                                Activities & Comments ({ticketActivities?.length || 0})
+                              </h4>
+                              {isLoadingActivities && (
+                                <span className="text-[10px] font-mono text-blue-400 flex items-center gap-1 animate-pulse">
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  Loading...
+                                </span>
+                              )}
+                            </div>
+
+                            {isLoadingActivities && (!ticketActivities || ticketActivities.length === 0) ? (
+                              <div className="p-4 text-center text-xs font-mono text-[#64748b] space-y-2 bg-[#090d16] rounded-xl border border-[#1e293b]">
+                                <RefreshCw className="w-4 h-4 animate-spin text-blue-400 mx-auto" />
+                                <p>Fetching activities from OpenProject...</p>
+                              </div>
+                            ) : !ticketActivities || ticketActivities.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-[#64748b] bg-[#090d16] rounded-xl border border-[#1e293b]">
+                                No activities or comments recorded yet.
+                              </div>
+                            ) : (
+                              <div className="space-y-2.5">
+                                {ticketActivities.map(act => (
+                                  <div
+                                    key={act.id}
+                                    className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-2 transition hover:border-slate-700"
+                                  >
+                                    <div className="flex items-center justify-between gap-2 border-b border-[#1e293b]/50 pb-2">
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 font-bold font-mono text-[10px] flex items-center justify-center border border-blue-500/30">
+                                          {(act.userName || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                                        </div>
+                                        <span className="text-xs font-semibold text-slate-200">{act.userName}</span>
+                                      </div>
+                                      <span className="text-[10px] font-mono text-[#64748b]">
+                                        {new Date(act.createdAt).toLocaleString(undefined, {
+                                          month: 'short',
+                                          day: 'numeric',
+                                          hour: '2-digit',
+                                          minute: '2-digit'
+                                        })}
+                                      </span>
+                                    </div>
+
+                                    {act.details && act.details.length > 0 && (
+                                      <ul className="text-[11px] font-mono text-[#94a3b8] space-y-0.5 pl-2 border-l-2 border-blue-500/30">
+                                        {act.details.map((detail, idx) => (
+                                          <li key={idx} className="flex items-center gap-1.5">
+                                            <span className="w-1 h-1 rounded-full bg-blue-400 shrink-0" />
+                                            <span>{detail}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+
+                                    {act.commentRaw && (
+                                      <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300 pt-0.5">
+                                        <ReactMarkdown
+                                          remarkPlugins={[remarkGfm]}
+                                          rehypePlugins={[rehypeRaw]}
+                                          components={{
+                                            a: ({ href, children }) => {
+                                              if (!href) return <span>{children}</span>;
+                                              const match = href.match(/work[_]?packages\/(\d+)/i);
+                                              if (match) {
+                                                const targetId = parseInt(match[1], 10);
+                                                return (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setSelectedTicketId(targetId)}
+                                                    className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline font-mono cursor-pointer"
+                                                  >
+                                                    <span>#{targetId}</span>
+                                                  </button>
+                                                );
+                                              }
+                                              return (
+                                                <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                                                  {children}
+                                                </a>
+                                              );
+                                            }
+                                          }}
+                                        >
+                                          {preprocessOpenProjectMarkdown(act.commentRaw)}
+                                        </ReactMarkdown>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1668,6 +1933,79 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            {/* Tracked Tickets Overview (Requirement 8) */}
+            <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl overflow-hidden flex flex-col">
+              <div className="p-4 border-b border-[#1e293b] flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-emerald-400" />
+                    <span>Tracked Work Packages ({trackedTicketsSummary.length})</span>
+                  </h3>
+                  <span className="text-[11px] text-[#64748b] font-mono">
+                    All tickets with recorded time entries
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsAddEffortModalOpen(true)}
+                  className="px-3 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-mono font-medium flex items-center gap-1.5 transition"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Log Time</span>
+                </button>
+              </div>
+
+              {trackedTicketsSummary.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#64748b] font-mono">
+                  No tracked work packages yet. Log time to start tracking tickets here.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+                  {trackedTicketsSummary.map(item => (
+                    <div
+                      key={item.id}
+                      className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl hover:border-blue-500/30 transition flex flex-col justify-between space-y-2 group"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs font-bold text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+                            #{item.id}
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                            {item.totalHours.toFixed(1)}h logged
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${item.id}`)}
+                          className="p-1 text-[#64748b] hover:text-white opacity-60 group-hover:opacity-100 transition"
+                          title="Open in OpenProject tab"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <p className="text-xs font-medium text-slate-200 line-clamp-2">
+                        {item.subject}
+                      </p>
+                      <div className="flex items-center justify-between pt-1 border-t border-[#1e293b]/50 text-[10px] font-mono text-[#64748b]">
+                        <span className="truncate max-w-[140px]">{item.project}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTicketId(item.id);
+                            setActiveTab('tickets');
+                          }}
+                          className="text-blue-400 hover:underline flex items-center gap-0.5"
+                        >
+                          <span>View Details</span>
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </main>
         )}
