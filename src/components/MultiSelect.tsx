@@ -13,6 +13,7 @@ interface MultiSelectProps {
   onChange: (selected: string[]) => void;
   className?: string;
   placeholder?: string;
+  align?: 'left' | 'right';
 }
 
 export default function MultiSelect({
@@ -21,7 +22,8 @@ export default function MultiSelect({
   selected,
   onChange,
   className = '',
-  placeholder
+  placeholder,
+  align = 'left'
 }: MultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -36,6 +38,13 @@ export default function MultiSelect({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Clear search query when dropdown closes
+  useEffect(() => {
+    if (!isOpen) {
+      setSearch('');
+    }
+  }, [isOpen]);
 
   const toggleOption = (id: string) => {
     if (selected.includes(id)) {
@@ -55,14 +64,15 @@ export default function MultiSelect({
 
   const filteredOptions = useMemo(() => {
     if (!search.trim()) return options;
-    const q = search.toLowerCase();
+    const q = search.toLowerCase().trim();
     return options.filter(o => o.name.toLowerCase().includes(q));
   }, [options, search]);
 
   const selectedText = useMemo(() => {
     if (selected.length === 0) return placeholder || `All ${label}s`;
     if (selected.length === 1) {
-      return options.find(o => o.id === selected[0])?.name || `1 ${label}`;
+      const match = options.find(o => o.id === selected[0]);
+      return match ? match.name : selected[0];
     }
     return `${selected.length} ${label}s`;
   }, [selected, options, label, placeholder]);
@@ -73,8 +83,8 @@ export default function MultiSelect({
     <div className={`relative ${className}`} ref={containerRef}>
       <button 
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center justify-between min-w-[130px] max-w-[190px] bg-[#090d16] border rounded-lg px-2.5 py-1.5 text-xs transition cursor-pointer ${
+        onClick={() => setIsOpen(prev => !prev)}
+        className={`flex items-center justify-between min-w-[130px] max-w-[190px] bg-[#090d16] border rounded-lg px-2.5 py-1.5 text-xs transition cursor-pointer select-none ${
           hasSelection 
             ? 'border-blue-500/60 bg-blue-500/10 text-white font-medium shadow-sm shadow-blue-500/10' 
             : 'border-[#1e293b] text-slate-300 hover:border-slate-600'
@@ -92,10 +102,13 @@ export default function MultiSelect({
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1.5 w-64 bg-[#0d1322] border border-[#1e293b] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col animate-in fade-in duration-150">
+        <div 
+          className={`absolute top-full ${align === 'right' ? 'right-0' : 'left-0'} mt-1.5 w-72 min-w-[240px] max-w-[320px] bg-[#0d1322] border border-[#1e293b] rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col animate-in fade-in duration-150`}
+          onClick={e => e.stopPropagation()}
+        >
           {/* Header controls: Search and Select All / Clear */}
-          <div className="p-2 border-b border-[#1e293b] bg-[#0a0f1d] space-y-1.5">
-            {options.length > 6 && (
+          <div className="p-2 border-b border-[#1e293b] bg-[#0a0f1d] space-y-1.5 shrink-0">
+            {options.length > 4 && (
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-[#64748b] absolute left-2.5 top-2 pointer-events-none" />
                 <input
@@ -103,11 +116,18 @@ export default function MultiSelect({
                   placeholder={`Search ${label.toLowerCase()}s...`}
                   value={search}
                   onChange={e => setSearch(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && filteredOptions.length === 1) {
+                      e.preventDefault();
+                      toggleOption(filteredOptions[0].id);
+                    }
+                  }}
                   className="w-full bg-[#090d16] border border-[#1e293b] rounded-lg pl-7 pr-7 py-1 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none"
                   autoFocus
                 />
                 {search && (
                   <button
+                    type="button"
                     onClick={() => setSearch('')}
                     className="absolute right-2 top-1.5 text-[#64748b] hover:text-white"
                   >
@@ -138,10 +158,10 @@ export default function MultiSelect({
           </div>
 
           {/* List of Options */}
-          <div className="max-h-56 overflow-y-auto p-1 space-y-0.5">
+          <div className="max-h-60 overflow-y-auto overscroll-contain p-1 space-y-0.5">
             {filteredOptions.length === 0 ? (
               <div className="px-3 py-4 text-xs text-[#64748b] text-center font-mono">
-                No matching {label.toLowerCase()}s
+                {search ? `No ${label.toLowerCase()}s match "${search}"` : `No ${label.toLowerCase()}s available`}
               </div>
             ) : (
               filteredOptions.map(option => {
@@ -151,7 +171,7 @@ export default function MultiSelect({
                     key={option.id}
                     type="button"
                     onClick={() => toggleOption(option.id)}
-                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-lg transition-colors text-left group ${
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 text-xs rounded-lg transition-colors text-left group cursor-pointer ${
                       isSelected 
                         ? 'bg-blue-600/15 text-blue-300 font-medium' 
                         : 'text-slate-300 hover:bg-[#1e293b]/60 hover:text-white'

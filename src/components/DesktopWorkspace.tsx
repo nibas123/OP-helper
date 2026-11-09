@@ -479,6 +479,69 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     return match ? parseInt(match[1], 10) : null;
   }, [selectedTicket?.description]);
 
+  // Comprehensive project options: union of API projects and distinct ticket.project values
+  const allProjectOptions = useMemo(() => {
+    const set = new Set<string>();
+    (projectsList || []).forEach(p => {
+      if (p.name?.trim()) set.add(p.name.trim());
+    });
+    tickets.forEach(t => {
+      if (t.project?.trim() && t.project.trim().toLowerCase() !== 'unknown project') {
+        set.add(t.project.trim());
+      }
+    });
+    return Array.from(set)
+      .sort((a, b) => a.localeCompare(b))
+      .map(name => ({ id: name, name }));
+  }, [projectsList, tickets]);
+
+  // Comprehensive status options: union of API statuses and distinct ticket.status values
+  const allStatusOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    (statuses || []).forEach(s => {
+      map.set(String(s.id), s.name);
+    });
+    tickets.forEach(t => {
+      if (t.status?.trim()) {
+        const key = t.statusId ? String(t.statusId) : t.status.trim();
+        if (!map.has(key)) {
+          map.set(key, t.status.trim());
+        }
+      }
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ id, name }));
+  }, [statuses, tickets]);
+
+  // Comprehensive type options: union of API types and distinct ticket.type values
+  const allTypeOptions = useMemo(() => {
+    const set = new Set<string>();
+    (types || []).forEach(t => {
+      if (t.name?.trim()) set.add(t.name.trim());
+    });
+    tickets.forEach(t => {
+      if (t.type?.trim()) set.add(t.type.trim());
+    });
+    return Array.from(set)
+      .sort((a, b) => a.localeCompare(b))
+      .map(name => ({ id: name, name }));
+  }, [types, tickets]);
+
+  // Comprehensive priority options: union of API priorities and distinct ticket.priority values
+  const allPriorityOptions = useMemo(() => {
+    const set = new Set<string>();
+    (displayPriorities || []).forEach(p => {
+      if (p.name?.trim()) set.add(p.name.trim());
+    });
+    tickets.forEach(t => {
+      if (t.priority?.trim()) set.add(t.priority.trim());
+    });
+    return Array.from(set)
+      .sort((a, b) => a.localeCompare(b))
+      .map(name => ({ id: name, name }));
+  }, [displayPriorities, tickets]);
+
   // Distinct assignee options for multi-select
   const allAssigneeOptions = useMemo(() => {
     const list = [
@@ -1485,9 +1548,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             </div>
 
             {/* Filter & Sorting Toolbar */}
-            <div className="px-3 sm:px-6 py-2 bg-[#0d1322] border-b border-[#1e293b] flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <div className="px-3 sm:px-6 py-2 bg-[#0d1322] border-b border-[#1e293b] flex flex-wrap items-center justify-between gap-2 shrink-0 relative z-30">
               {/* Left filter pill group */}
-              <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar w-full sm:w-auto pb-1 sm:pb-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                 {/* Category toggle */}
                 <div className="flex items-center bg-[#090d16] border border-[#1e293b] rounded-lg p-0.5 text-xs">
                   <button
@@ -1513,7 +1576,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 {/* Project MultiSelect */}
                 <MultiSelect
                   label="Project"
-                  options={projectsList.map(p => ({ id: p.name, name: p.name }))}
+                  options={allProjectOptions}
                   selected={filterProjects}
                   onChange={setFilterProjects}
                   placeholder="All Projects"
@@ -1522,7 +1585,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 {/* Status MultiSelect */}
                 <MultiSelect
                   label="Status"
-                  options={statuses.map(s => ({ id: String(s.id), name: s.name }))}
+                  options={allStatusOptions}
                   selected={filterStatuses}
                   onChange={setFilterStatuses}
                   placeholder="All Statuses"
@@ -1531,7 +1594,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 {/* Type MultiSelect */}
                 <MultiSelect
                   label="Type"
-                  options={types.map(t => ({ id: t.name, name: t.name }))}
+                  options={allTypeOptions}
                   selected={effectiveFilterTypes}
                   onChange={(vals) => {
                     if (setFilterTypes) setFilterTypes(vals);
@@ -1555,13 +1618,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 {/* Priority MultiSelect */}
                 <MultiSelect
                   label="Priority"
-                  options={displayPriorities.map(p => ({ id: p.name, name: p.name }))}
+                  options={allPriorityOptions}
                   selected={effectiveFilterPriorities}
                   onChange={(vals) => {
                     if (setFilterPriorities) setFilterPriorities(vals);
                     else if (setFilterPriority) setFilterPriority(vals[0] || '');
                   }}
                   placeholder="All Priorities"
+                  align="right"
                 />
 
                 {/* Starred Filter Pill */}
