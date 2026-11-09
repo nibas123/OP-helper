@@ -284,7 +284,65 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
       localStorage.setItem('op_active_tab', activeTab);
     } catch (e) {}
   }, [activeTab]);
-  const [inspectorTab, setInspectorTab] = useState<'details' | 'efforts' | 'comments'>('details');
+  // Inspector tab: overview (all-in-one in full view), details, efforts, comments
+  const [inspectorTab, setInspectorTab] = useState<'overview' | 'details' | 'efforts' | 'comments'>('details');
+
+  // Ticket navigation history stack for back navigation when opening ticket-from-ticket
+  const [ticketHistory, setTicketHistory] = useState<number[]>([]);
+
+  // Desktop Full View mode state (persisted)
+  const [isInspectorFullView, setIsInspectorFullView] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('op_inspector_full_view') === 'true';
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const toggleInspectorFullView = () => {
+    setIsInspectorFullView(prev => {
+      const next = !prev;
+      try { localStorage.setItem('op_inspector_full_view', String(next)); } catch (e) {}
+      if (next) {
+        setInspectorTab('overview');
+      } else {
+        setInspectorTab('details');
+      }
+      return next;
+    });
+  };
+
+  // Helper to drill down into a ticket from another ticket (maintaining back history)
+  const navigateToLinkedTicket = (targetId: number) => {
+    if (selectedTicketId && selectedTicketId !== targetId) {
+      setTicketHistory(prev => [...prev, selectedTicketId]);
+    }
+    setSelectedTicketId(targetId);
+  };
+
+  // Helper to select a ticket from the top-level table or card list (resets history)
+  const selectRootTicket = (ticketId: number) => {
+    setTicketHistory([]);
+    setSelectedTicketId(ticketId);
+  };
+
+  // Back navigation handler: pops previous ticket from history, or closes inspector if at root
+  const handleBackNavigation = () => {
+    if (ticketHistory.length > 0) {
+      const nextHist = [...ticketHistory];
+      const prevTicketId = nextHist.pop()!;
+      setTicketHistory(nextHist);
+      setSelectedTicketId(prevTicketId);
+    } else {
+      setSelectedTicketId(null);
+    }
+  };
+
+  // Full close inspector handler
+  const handleCloseInspector = () => {
+    setTicketHistory([]);
+    setSelectedTicketId(null);
+  };
   const [copiedId, setCopiedId] = useState(false);
   const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
   const [processingItemId, setProcessingItemId] = useState<string | null>(null);
@@ -818,6 +876,332 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     </div>
   );
 
+  // --- Helper Section Renderers for Ticket Details, Efforts, and Comments ---
+  const renderDescriptionSection = () => (
+    <div className="space-y-4 bg-[#090d16] p-4 rounded-xl border border-[#1e293b]">
+      {/* Linked Production / Parent Work Package Banner (Requirement 3) */}
+      {linkedWorkPackageMatch && (
+        <div className="p-3 bg-blue-950/40 border border-blue-500/30 rounded-xl flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-blue-300 min-w-0">
+            <FolderKanban className="w-4 h-4 text-blue-400 shrink-0" />
+            <span className="truncate">
+              Linked OP Ticket: <strong className="text-white font-mono">#{linkedWorkPackageMatch}</strong>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => navigateToLinkedTicket(linkedWorkPackageMatch)}
+              className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-mono font-medium transition flex items-center gap-1 shadow-sm"
+              title={`Switch to ticket #${linkedWorkPackageMatch} in app`}
+            >
+              <span>View #{linkedWorkPackageMatch}</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${linkedWorkPackageMatch}`)}
+              className="p-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-300 hover:text-white rounded-lg transition"
+              title="Open in OpenProject tab"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300">
+        {preprocessedDescription ? (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeRaw]}
+            components={{
+              img: ({ src, alt }) => (
+                <AuthenticatedImage src={src} alt={alt} onZoom={setZoomedImageUrl} />
+              ),
+              a: ({ href, children }) => {
+                if (!href) return <span>{children}</span>;
+                const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
+                if (match) {
+                  const targetId = parseInt(match[1], 10);
+                  return (
+                    <span className="inline-flex items-center gap-1.5 my-0.5 align-middle">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigateToLinkedTicket(targetId);
+                        }}
+                        className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 rounded text-xs font-mono font-medium transition cursor-pointer"
+                        title={`Switch to ticket #${targetId} in app`}
+                      >
+                        <span>#{targetId}</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openInFullScreenAndClose(href);
+                        }}
+                        className="text-[#64748b] hover:text-white p-0.5"
+                        title="Open in OpenProject tab"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  );
+                }
+                return (
+                  <a
+                    href={href}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      openInFullScreenAndClose(href);
+                    }}
+                    className="text-blue-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    <span>{children}</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                );
+              }
+            }}
+          >
+            {preprocessedDescription}
+          </ReactMarkdown>
+        ) : (
+          <p className="italic text-[#64748b]">No description provided for this work package.</p>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderEffortsSection = () => (
+    <div className="space-y-4">
+      {/* Quick Effort Entry Card */}
+      <div className="p-4 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-slate-200">Quick Log Time</span>
+          <div className="flex items-center gap-1">
+            {['0.25', '0.5', '1.0', '2.0'].map(h => (
+              <button
+                key={h}
+                type="button"
+                onClick={() => setQuickEffortHours(h)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono border transition ${
+                  quickEffortHours === h
+                    ? 'bg-blue-600 border-blue-500 text-white font-bold'
+                    : 'bg-[#1e293b] border-transparent text-[#94a3b8] hover:text-white'
+                }`}
+              >
+                +{h}h
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <form onSubmit={handleInlineEffortSubmit} className="space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              step="0.25"
+              min="0.1"
+              value={quickEffortHours}
+              onChange={e => setQuickEffortHours(e.target.value)}
+              className="w-20 bg-[#0d1322] border border-[#1e293b] rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:border-blue-500 focus:outline-none"
+              placeholder="Hours"
+              required
+            />
+            <input
+              type="text"
+              value={quickEffortComment}
+              onChange={e => setQuickEffortComment(e.target.value)}
+              placeholder="What did you work on?"
+              className="flex-1 bg-[#0d1322] border border-[#1e293b] rounded-lg px-2.5 py-1 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={isSubmittingQuickEffort}
+              className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
+            >
+              {isSubmittingQuickEffort ? 'Saving...' : 'Log'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Time logs history */}
+      <div className="space-y-2 bg-[#090d16] p-4 rounded-xl border border-[#1e293b]">
+        <h4 className="text-[11px] font-mono uppercase text-[#64748b] tracking-wider">Log History</h4>
+        {isLoadingTicketEfforts ? (
+          <p className="text-xs text-blue-400 font-mono animate-pulse">Loading logged efforts...</p>
+        ) : ticketEffortsList.length === 0 ? (
+          <p className="text-xs text-[#64748b]">No time entries logged for this work package yet.</p>
+        ) : (
+          ticketEffortsList.map(entry => (
+            <div
+              key={entry.id}
+              className="p-2.5 bg-[#0d1322] border border-[#1e293b] rounded-xl flex items-start justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-bold text-emerald-400">
+                    {entry.hours.toFixed(2)}h
+                  </span>
+                  <span className="text-[10px] text-[#64748b] font-mono">{entry.spentOn}</span>
+                  <span className="text-[11px] text-slate-300 font-medium">{entry.userName}</span>
+                </div>
+                {entry.comment && (
+                  <p className="text-xs text-[#94a3b8] mt-1 break-words">{entry.comment}</p>
+                )}
+              </div>
+              <button
+                onClick={() => handleDeleteEffort({ id: entry.id, hours: entry.hours, spentOn: entry.spentOn })}
+                className="p-1 text-[#64748b] hover:text-rose-400 transition"
+                title="Delete effort record"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  const renderCommentsSection = () => (
+    <div className="space-y-4">
+      {/* New Comment / Activity Form */}
+      <form onSubmit={handleInlineCommentSubmit} className="space-y-2.5 bg-[#090d16] p-4 rounded-xl border border-[#1e293b]">
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+            <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
+            <span>Add Activity / Comment</span>
+          </label>
+          <span className="text-[10px] font-mono text-[#64748b]">Markdown supported</span>
+        </div>
+        <textarea
+          rows={3}
+          value={newCommentText}
+          onChange={e => setNewCommentText(e.target.value)}
+          placeholder="Write a comment or activity update for this work package..."
+          className="w-full bg-[#0d1322] border border-[#1e293b] rounded-lg p-2.5 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none resize-none"
+        />
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={isSubmittingComment || !newCommentText.trim()}
+            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
+          >
+            <Send className="w-3 h-3" />
+            <span>{isSubmittingComment ? 'Posting...' : 'Post Activity'}</span>
+          </button>
+        </div>
+      </form>
+
+      {/* Activities Stream */}
+      <div className="space-y-3 bg-[#090d16] p-4 rounded-xl border border-[#1e293b]">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[11px] font-mono uppercase text-[#64748b] tracking-wider">
+            Activities & Comments ({ticketActivities?.length || 0})
+          </h4>
+          {isLoadingActivities && (
+            <span className="text-[10px] font-mono text-blue-400 flex items-center gap-1 animate-pulse">
+              <RefreshCw className="w-3 h-3 animate-spin" />
+              Loading...
+            </span>
+          )}
+        </div>
+
+        {isLoadingActivities && (!ticketActivities || ticketActivities.length === 0) ? (
+          <div className="p-4 text-center text-xs font-mono text-[#64748b] space-y-2 bg-[#0d1322] rounded-xl border border-[#1e293b]">
+            <RefreshCw className="w-4 h-4 animate-spin text-blue-400 mx-auto" />
+            <p>Fetching activities from OpenProject...</p>
+          </div>
+        ) : !ticketActivities || ticketActivities.length === 0 ? (
+          <div className="p-4 text-center text-xs text-[#64748b] bg-[#0d1322] rounded-xl border border-[#1e293b]">
+            No activities or comments recorded yet.
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {ticketActivities.map(act => (
+              <div
+                key={act.id}
+                className="p-3 bg-[#0d1322] border border-[#1e293b] rounded-xl space-y-2 transition hover:border-slate-700"
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-[#1e293b]/50 pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 font-bold font-mono text-[10px] flex items-center justify-center border border-blue-500/30">
+                      {(act.userName || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                    </div>
+                    <span className="text-xs font-semibold text-slate-200">{act.userName}</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-[#64748b]">
+                    {new Date(act.createdAt).toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
+
+                {act.details && act.details.length > 0 && (
+                  <ul className="text-[11px] font-mono text-[#94a3b8] space-y-0.5 pl-2 border-l-2 border-blue-500/30">
+                    {act.details.map((detail, idx) => (
+                      <li key={idx} className="flex items-center gap-1.5">
+                        <span className="w-1 h-1 rounded-full bg-blue-400 shrink-0" />
+                        <span>{detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {act.commentRaw && (
+                  <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300 pt-0.5">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeRaw]}
+                      components={{
+                        img: ({ src, alt }) => (
+                          <AuthenticatedImage src={src} alt={alt} onZoom={setZoomedImageUrl} />
+                        ),
+                        a: ({ href, children }) => {
+                          if (!href) return <span>{children}</span>;
+                          const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
+                          if (match) {
+                            const targetId = parseInt(match[1], 10);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => navigateToLinkedTicket(targetId)}
+                                className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline font-mono cursor-pointer"
+                              >
+                                <span>#{targetId}</span>
+                              </button>
+                            );
+                          }
+                          return (
+                            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                              {children}
+                            </a>
+                          );
+                        }
+                      }}
+                    >
+                      {preprocessOpenProjectMarkdown(act.commentRaw)}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex h-[100dvh] w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-text relative">
       {/* Mobile Drawer (Slide-Over Navigation) */}
@@ -1232,7 +1616,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               {/* =============================================================== */}
               {/* LEFT: High-Density Work Package Table (100% on mobile, 58% on desktop) */}
               {/* =============================================================== */}
-              <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicketId ? 'hidden lg:flex' : 'flex'}`}>
+              <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicketId ? (isInspectorFullView ? 'hidden' : 'hidden lg:flex') : 'flex'}`}>
                 <div className="flex-1 overflow-auto">
                   <table className="hidden md:table w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-[#0d1322] z-10 border-b border-[#1e293b] text-[11px] font-mono text-[#64748b] uppercase tracking-wider">
@@ -1272,7 +1656,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                           return (
                             <tr
                               key={ticket.id}
-                              onClick={() => setSelectedTicketId(ticket.id)}
+                              onClick={() => selectRootTicket(ticket.id)}
                               className={`cursor-pointer transition group select-text ${
                                 isSelected
                                   ? 'bg-blue-600/15 border-l-4 border-l-blue-500'
@@ -1363,7 +1747,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                   </table>
 
                   {/* Mobile Card List (md:hidden) */}
-                  <div className="md:hidden divide-y divide-[#1e293b]">
+                  <div className="md:hidden divide-y divide-[#1e293b] pb-24">
                     {filteredTickets.length === 0 ? (
                       <div className="p-8 text-center text-[#64748b]">
                         <div className="w-12 h-12 rounded-xl bg-[#1e293b]/40 flex items-center justify-center mx-auto mb-3 text-[#94a3b8]">
@@ -1376,11 +1760,11 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                       filteredTickets.map((ticket) => {
                         const isSelected = ticket.id === selectedTicketId;
                         const isUrgent = ticket.priority?.toLowerCase() === 'high' || ticket.priority?.toLowerCase() === 'urgent';
-                        const spentNum = parseFloat(ticket.spentTime || '0') || 0;
+                        const spentNum = parseDurationToHours(ticket.spentTime);
                         return (
                           <div
                             key={ticket.id}
-                            onClick={() => setSelectedTicketId(ticket.id)}
+                            onClick={() => selectRootTicket(ticket.id)}
                             className={`p-3.5 flex flex-col gap-2 transition cursor-pointer active:bg-blue-600/10 ${
                               isSelected ? 'bg-blue-600/15 border-l-4 border-blue-500' : 'hover:bg-[#0f172a]'
                             }`}
@@ -1466,18 +1850,20 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               {/* RIGHT: Live Work Package Detail Inspector (Responsive / Resizable Pane) */}
               {/* =============================================================== */}
               <div 
-                style={isDesktop ? { width: `${inspectorWidth}px` } : undefined}
-                className={`${selectedTicketId ? 'flex fixed inset-0 z-40 md:static md:z-auto' : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text ${isDesktop ? 'max-w-[85vw]' : 'w-full'}`}
+                style={isDesktop && !isInspectorFullView ? { width: `${inspectorWidth}px` } : undefined}
+                className={`${selectedTicketId ? (isDesktop ? 'flex h-full' : 'flex fixed inset-0 z-50 bg-[#090d16] h-[100dvh] w-full') : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text ${isDesktop && !isInspectorFullView ? 'max-w-[85vw]' : 'w-full'}`}
               >
-                {/* Inspector Horizontal Resize Handle */}
-                <div
-                  onMouseDown={handleInspectorResizeStart}
-                  onDoubleClick={() => setInspectorWidth(520)}
-                  className="hidden lg:flex absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-30 group items-center justify-center select-none"
-                  title="Drag to resize details pane width (Double-click to reset)"
-                >
-                  <div className="w-[1.5px] h-8 bg-slate-600 group-hover:bg-blue-400 group-hover:h-12 transition-all rounded-full" />
-                </div>
+                {/* Inspector Horizontal Resize Handle (Desktop side-by-side mode only) */}
+                {isDesktop && !isInspectorFullView && (
+                  <div
+                    onMouseDown={handleInspectorResizeStart}
+                    onDoubleClick={() => setInspectorWidth(520)}
+                    className="hidden lg:flex absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-30 group items-center justify-center select-none"
+                    title="Drag to resize details pane width (Double-click to reset)"
+                  >
+                    <div className="w-[1.5px] h-8 bg-slate-600 group-hover:bg-blue-400 group-hover:h-12 transition-all rounded-full" />
+                  </div>
+                )}
                 {!selectedTicket ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748b]">
                     <div className="w-16 h-16 rounded-2xl bg-[#1e293b]/40 flex items-center justify-center mb-4 text-[#94a3b8]">
@@ -1498,16 +1884,40 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     {/* Inspector Header */}
                     <div className="p-4 border-b border-[#1e293b] bg-[#0d1322] shrink-0">
                       <div className="flex items-center justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-2">
-                          {/* Back button for Mobile */}
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                          {/* Back button with navigation history */}
                           <button
-                            onClick={() => setSelectedTicketId(null)}
-                            className="lg:hidden flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition mr-1"
-                            title="Back to Work Packages"
+                            type="button"
+                            onClick={handleBackNavigation}
+                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 active:bg-blue-500/30 border border-blue-500/30 rounded-lg transition"
+                            title={ticketHistory.length > 0 ? `Back to #${ticketHistory[ticketHistory.length - 1]}` : (isDesktop ? "Back to Table" : "Back to Work Packages")}
                           >
                             <ChevronLeft className="w-4 h-4" />
-                            <span>Back</span>
+                            <span>{ticketHistory.length > 0 ? `#${ticketHistory[ticketHistory.length - 1]}` : (isDesktop && isInspectorFullView ? "Back to Table" : "Back")}</span>
                           </button>
+
+                          {/* Breadcrumbs for deep navigation */}
+                          {ticketHistory.length > 0 && (
+                            <div className="hidden sm:flex items-center gap-1 text-[11px] font-mono text-slate-400 overflow-x-auto no-scrollbar py-0.5">
+                              {ticketHistory.map((histId, idx) => (
+                                <React.Fragment key={histId}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextHist = ticketHistory.slice(0, idx);
+                                      setTicketHistory(nextHist);
+                                      setSelectedTicketId(histId);
+                                    }}
+                                    className="hover:text-blue-400 hover:underline text-slate-400 transition"
+                                  >
+                                    #{histId}
+                                  </button>
+                                  <span className="text-slate-600">/</span>
+                                </React.Fragment>
+                              ))}
+                            </div>
+                          )}
+
                           <span className="font-mono text-xs font-bold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-lg border border-blue-500/20">
                             #{selectedTicket.id}
                           </span>
@@ -1521,7 +1931,17 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Desktop Full View Toggle Button */}
+                          <button
+                            type="button"
+                            onClick={toggleInspectorFullView}
+                            className="hidden lg:flex p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-white hover:border-slate-600 transition"
+                            title={isInspectorFullView ? "Exit Full View (Side-by-side mode)" : "Expand to Full View"}
+                          >
+                            {isInspectorFullView ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                          </button>
+
                           <button
                             onClick={handleCopyLink}
                             className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-white hover:border-slate-600 transition"
@@ -1548,9 +1968,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                           </button>
 
                           <button
-                            onClick={() => setSelectedTicketId(null)}
+                            onClick={handleCloseInspector}
                             className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#64748b] hover:text-white hover:border-slate-600 transition"
-                            title="Close inspector"
+                            title="Close ticket view"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -1657,329 +2077,34 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     </div>
 
                     {/* Inspector Scrollable Body */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                      {/* TAB 1: Markdown Description */}
+                    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+                      {inspectorTab === 'overview' && (
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto">
+                          <div className="lg:col-span-7 space-y-5">
+                            {renderDescriptionSection()}
+                            {renderEffortsSection()}
+                          </div>
+                          <div className="lg:col-span-5 space-y-5">
+                            {renderCommentsSection()}
+                          </div>
+                        </div>
+                      )}
+
                       {inspectorTab === 'details' && (
-                        <div className="space-y-4">
-                          {/* Linked Production / Parent Work Package Banner (Requirement 3) */}
-                          {linkedWorkPackageMatch && (
-                            <div className="p-3 bg-blue-950/40 border border-blue-500/30 rounded-xl flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-2 text-xs text-blue-300 min-w-0">
-                                <FolderKanban className="w-4 h-4 text-blue-400 shrink-0" />
-                                <span className="truncate">
-                                  Linked OP Ticket: <strong className="text-white font-mono">#{linkedWorkPackageMatch}</strong>
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedTicketId(linkedWorkPackageMatch)}
-                                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-mono font-medium transition flex items-center gap-1 shadow-sm"
-                                  title={`Switch to ticket #${linkedWorkPackageMatch} in app`}
-                                >
-                                  <span>View #{linkedWorkPackageMatch}</span>
-                                  <ArrowRight className="w-3 h-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${linkedWorkPackageMatch}`)}
-                                  className="p-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-300 hover:text-white rounded-lg transition"
-                                  title="Open in OpenProject tab"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300">
-                            {preprocessedDescription ? (
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                rehypePlugins={[rehypeRaw]}
-                                components={{
-                                  img: ({ src, alt }) => (
-                                    <AuthenticatedImage src={src} alt={alt} onZoom={setZoomedImageUrl} />
-                                  ),
-                                  a: ({ href, children }) => {
-                                    if (!href) return <span>{children}</span>;
-                                    const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
-                                    if (match) {
-                                      const targetId = parseInt(match[1], 10);
-                                      return (
-                                        <span className="inline-flex items-center gap-1.5 my-0.5 align-middle">
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setSelectedTicketId(targetId);
-                                            }}
-                                            className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 rounded text-xs font-mono font-medium transition cursor-pointer"
-                                            title={`Switch to ticket #${targetId} in app`}
-                                          >
-                                            <span>#{targetId}</span>
-                                            <ArrowRight className="w-3 h-3" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              openInFullScreenAndClose(href);
-                                            }}
-                                            className="text-[#64748b] hover:text-white p-0.5"
-                                            title="Open in OpenProject tab"
-                                          >
-                                            <ExternalLink className="w-3 h-3" />
-                                          </button>
-                                        </span>
-                                      );
-                                    }
-                                    return (
-                                      <a
-                                        href={href}
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          openInFullScreenAndClose(href);
-                                        }}
-                                        className="text-blue-400 hover:underline inline-flex items-center gap-1"
-                                      >
-                                        <span>{children}</span>
-                                        <ExternalLink className="w-3 h-3" />
-                                      </a>
-                                    );
-                                  }
-                                }}
-                              >
-                                {preprocessedDescription}
-                              </ReactMarkdown>
-                            ) : (
-                              <p className="italic text-[#64748b]">No description provided for this work package.</p>
-                            )}
-                          </div>
+                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                          {renderDescriptionSection()}
                         </div>
                       )}
 
-                      {/* TAB 2: Time Tracking & Inline Effort Form */}
                       {inspectorTab === 'efforts' && (
-                        <div className="space-y-4">
-                          {/* Quick Effort Entry Card */}
-                          <div className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-slate-200">Quick Log Time</span>
-                              <div className="flex items-center gap-1">
-                                {['0.25', '0.5', '1.0', '2.0'].map(h => (
-                                  <button
-                                    key={h}
-                                    type="button"
-                                    onClick={() => setQuickEffortHours(h)}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono border transition ${
-                                      quickEffortHours === h
-                                        ? 'bg-blue-600 border-blue-500 text-white font-bold'
-                                        : 'bg-[#1e293b] border-transparent text-[#94a3b8] hover:text-white'
-                                    }`}
-                                  >
-                                    +{h}h
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            <form onSubmit={handleInlineEffortSubmit} className="space-y-2">
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="number"
-                                  step="0.25"
-                                  min="0.1"
-                                  value={quickEffortHours}
-                                  onChange={e => setQuickEffortHours(e.target.value)}
-                                  className="w-20 bg-[#0d1322] border border-[#1e293b] rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:border-blue-500 focus:outline-none"
-                                  placeholder="Hours"
-                                  required
-                                />
-                                <input
-                                  type="text"
-                                  value={quickEffortComment}
-                                  onChange={e => setQuickEffortComment(e.target.value)}
-                                  placeholder="What did you work on?"
-                                  className="flex-1 bg-[#0d1322] border border-[#1e293b] rounded-lg px-2.5 py-1 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none"
-                                />
-                                <button
-                                  type="submit"
-                                  disabled={isSubmittingQuickEffort}
-                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
-                                >
-                                  {isSubmittingQuickEffort ? 'Saving...' : 'Log'}
-                                </button>
-                              </div>
-                            </form>
-                          </div>
-
-                          {/* Time logs history */}
-                          <div className="space-y-2">
-                            <h4 className="text-[11px] font-mono uppercase text-[#64748b] tracking-wider">Log History</h4>
-                            {isLoadingTicketEfforts ? (
-                              <p className="text-xs text-blue-400 font-mono animate-pulse">Loading logged efforts...</p>
-                            ) : ticketEffortsList.length === 0 ? (
-                              <p className="text-xs text-[#64748b]">No time entries logged for this work package yet.</p>
-                            ) : (
-                              ticketEffortsList.map(entry => (
-                                <div
-                                  key={entry.id}
-                                  className="p-2.5 bg-[#090d16] border border-[#1e293b] rounded-xl flex items-start justify-between gap-2"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-mono text-xs font-bold text-emerald-400">
-                                        {entry.hours.toFixed(2)}h
-                                      </span>
-                                      <span className="text-[10px] text-[#64748b] font-mono">{entry.spentOn}</span>
-                                      <span className="text-[11px] text-slate-300 font-medium">{entry.userName}</span>
-                                    </div>
-                                    {entry.comment && (
-                                      <p className="text-xs text-[#94a3b8] mt-1 break-words">{entry.comment}</p>
-                                    )}
-                                  </div>
-                                  <button
-                                    onClick={() => handleDeleteEffort({ id: entry.id, hours: entry.hours, spentOn: entry.spentOn })}
-                                    className="p-1 text-[#64748b] hover:text-rose-400 transition"
-                                    title="Delete effort record"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              ))
-                            )}
-                          </div>
+                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                          {renderEffortsSection()}
                         </div>
                       )}
 
-                      {/* TAB 3: Comments & Activity Thread (Requirement 2) */}
                       {inspectorTab === 'comments' && (
-                        <div className="space-y-4">
-                          {/* New Comment / Activity Form */}
-                          <form onSubmit={handleInlineCommentSubmit} className="space-y-2.5 bg-[#090d16] p-3 rounded-xl border border-[#1e293b]">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                                <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
-                                <span>Add Activity / Comment</span>
-                              </label>
-                              <span className="text-[10px] font-mono text-[#64748b]">Markdown supported</span>
-                            </div>
-                            <textarea
-                              rows={3}
-                              value={newCommentText}
-                              onChange={e => setNewCommentText(e.target.value)}
-                              placeholder="Write a comment or activity update for this work package..."
-                              className="w-full bg-[#0d1322] border border-[#1e293b] rounded-lg p-2.5 text-xs text-white placeholder-[#64748b] focus:border-blue-500 focus:outline-none resize-none"
-                            />
-                            <div className="flex justify-end">
-                              <button
-                                type="submit"
-                                disabled={isSubmittingComment || !newCommentText.trim()}
-                                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
-                              >
-                                <Send className="w-3 h-3" />
-                                <span>{isSubmittingComment ? 'Posting...' : 'Post Activity'}</span>
-                              </button>
-                            </div>
-                          </form>
-
-                          {/* Activities Stream */}
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-[11px] font-mono uppercase text-[#64748b] tracking-wider">
-                                Activities & Comments ({ticketActivities?.length || 0})
-                              </h4>
-                              {isLoadingActivities && (
-                                <span className="text-[10px] font-mono text-blue-400 flex items-center gap-1 animate-pulse">
-                                  <RefreshCw className="w-3 h-3 animate-spin" />
-                                  Loading...
-                                </span>
-                              )}
-                            </div>
-
-                            {isLoadingActivities && (!ticketActivities || ticketActivities.length === 0) ? (
-                              <div className="p-4 text-center text-xs font-mono text-[#64748b] space-y-2 bg-[#090d16] rounded-xl border border-[#1e293b]">
-                                <RefreshCw className="w-4 h-4 animate-spin text-blue-400 mx-auto" />
-                                <p>Fetching activities from OpenProject...</p>
-                              </div>
-                            ) : !ticketActivities || ticketActivities.length === 0 ? (
-                              <div className="p-4 text-center text-xs text-[#64748b] bg-[#090d16] rounded-xl border border-[#1e293b]">
-                                No activities or comments recorded yet.
-                              </div>
-                            ) : (
-                              <div className="space-y-2.5">
-                                {ticketActivities.map(act => (
-                                  <div
-                                    key={act.id}
-                                    className="p-3 bg-[#090d16] border border-[#1e293b] rounded-xl space-y-2 transition hover:border-slate-700"
-                                  >
-                                    <div className="flex items-center justify-between gap-2 border-b border-[#1e293b]/50 pb-2">
-                                      <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded-full bg-blue-600/20 text-blue-400 font-bold font-mono text-[10px] flex items-center justify-center border border-blue-500/30">
-                                          {(act.userName || 'U').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                                        </div>
-                                        <span className="text-xs font-semibold text-slate-200">{act.userName}</span>
-                                      </div>
-                                      <span className="text-[10px] font-mono text-[#64748b]">
-                                        {new Date(act.createdAt).toLocaleString(undefined, {
-                                          month: 'short',
-                                          day: 'numeric',
-                                          hour: '2-digit',
-                                          minute: '2-digit'
-                                        })}
-                                      </span>
-                                    </div>
-
-                                    {act.details && act.details.length > 0 && (
-                                      <ul className="text-[11px] font-mono text-[#94a3b8] space-y-0.5 pl-2 border-l-2 border-blue-500/30">
-                                        {act.details.map((detail, idx) => (
-                                          <li key={idx} className="flex items-center gap-1.5">
-                                            <span className="w-1 h-1 rounded-full bg-blue-400 shrink-0" />
-                                            <span>{detail}</span>
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    )}
-
-                                    {act.commentRaw && (
-                                      <div className="prose prose-invert max-w-none text-xs leading-relaxed text-slate-300 pt-0.5">
-                                        <ReactMarkdown
-                                          remarkPlugins={[remarkGfm]}
-                                          rehypePlugins={[rehypeRaw]}
-                                          components={{
-                                            a: ({ href, children }) => {
-                                              if (!href) return <span>{children}</span>;
-                                              const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
-                                              if (match) {
-                                                const targetId = parseInt(match[1], 10);
-                                                return (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => setSelectedTicketId(targetId)}
-                                                    className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 underline font-mono cursor-pointer"
-                                                  >
-                                                    <span>#{targetId}</span>
-                                                  </button>
-                                                );
-                                              }
-                                              return (
-                                                <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
-                                                  {children}
-                                                </a>
-                                              );
-                                            }
-                                          }}
-                                        >
-                                          {preprocessOpenProjectMarkdown(act.commentRaw)}
-                                        </ReactMarkdown>
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
+                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                          {renderCommentsSection()}
                         </div>
                       )}
                     </div>

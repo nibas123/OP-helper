@@ -17,6 +17,7 @@ import {
   Minimize2
 } from 'lucide-react';
 import DesktopWorkspace from './components/DesktopWorkspace';
+import ImageZoomModal from './components/ImageZoomModal';
 import { useResizableWindow } from './hooks/useResizableWindow';
 import { 
   db, 
@@ -1298,7 +1299,7 @@ export default function App() {
     };
   }, [selectedTicketId, currentUser]);
 
-  // Search filter for Add Effort Ticket Picker - ONLY STARRED TICKETS
+  // Search filter for Add Effort Ticket Picker - ONLY STARRED TICKETS when input is empty
   const effortTicketSearchResults = useMemo(() => {
     const starredOnly = tickets.filter(t => !!t.starred);
     const raw = effortTicketSearch.trim();
@@ -1310,13 +1311,17 @@ export default function App() {
     const cleanId = raw.replace(/^#/, '').toLowerCase();
     const q = raw.toLowerCase();
 
-    // Filter strictly within the user's starred tickets
-    return starredOnly.filter(t => 
+    // When searching, search all tickets with starred prioritized at top
+    return tickets.filter(t => 
       (extractedId && t.id === extractedId) ||
       String(t.id).includes(cleanId) ||
       t.subject.toLowerCase().includes(q) ||
       (t.project && t.project.toLowerCase().includes(q))
-    );
+    ).sort((a, b) => {
+      if (a.starred && !b.starred) return -1;
+      if (!a.starred && b.starred) return 1;
+      return 0;
+    }).slice(0, 30);
   }, [tickets, effortTicketSearch]);
 
   // --- Saved Views Activation & Application ---
@@ -1868,16 +1873,36 @@ export default function App() {
                             {effortSelectedTicket.status}
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEffortSelectedTicket(null);
-                            setEffortTicketFetchError(null);
-                          }}
-                          className="text-xs text-blue-400 hover:text-blue-300 hover:underline shrink-0 font-mono font-medium"
-                        >
-                          Change
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetUrl = `${opUrl.replace(/\/+$/, '')}/work_packages/${effortSelectedTicket.id}`;
+                              if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+                                chrome.tabs.create({ url: targetUrl });
+                                try { window.close(); } catch(e) {}
+                              } else {
+                                window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                                try { window.close(); } catch(e) {}
+                              }
+                            }}
+                            className="text-xs text-slate-300 hover:text-white flex items-center gap-1 font-mono px-2 py-0.5 rounded bg-[#1e293b] hover:bg-[#283548] border border-slate-700 transition"
+                            title="Open work package directly in OpenProject tab"
+                          >
+                            <ExternalLink className="w-3 h-3 text-blue-400" />
+                            <span>Open in OP</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEffortSelectedTicket(null);
+                              setEffortTicketFetchError(null);
+                            }}
+                            className="text-xs text-blue-400 hover:text-blue-300 hover:underline shrink-0 font-mono font-medium"
+                          >
+                            Change
+                          </button>
+                        </div>
                       </div>
 
                       <p className="text-xs font-semibold text-[#f1f5f9] leading-snug">
@@ -2014,12 +2039,23 @@ export default function App() {
                             </div>
                           )}
 
-                          <div className="px-3 py-1.5 bg-[#0d1322] border-b border-[#1e293b] text-[10px] font-mono text-[#64748b] uppercase tracking-wider flex items-center justify-between">
-                            <span className="flex items-center gap-1.5 text-amber-400">
-                              <Star className="w-3 h-3 fill-current" />
-                              <span>Starred Work Packages</span>
+                          <div className="px-3 py-1.5 bg-[#0d1322] border-b border-[#1e293b] text-[10px] font-mono uppercase tracking-wider flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              {effortTicketSearch.trim() ? (
+                                <>
+                                  <Search className="w-3 h-3 text-blue-400" />
+                                  <span className="text-slate-300 font-semibold">Search Results</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Star className="w-3 h-3 text-amber-400 fill-current" />
+                                  <span className="text-amber-400 font-semibold">Starred Work Packages</span>
+                                </>
+                              )}
                             </span>
-                            <span className="text-amber-400 font-bold">{effortTicketSearchResults.length} starred</span>
+                            <span className={effortTicketSearch.trim() ? "text-slate-400 font-bold" : "text-amber-400 font-bold"}>
+                              {effortTicketSearchResults.length} {effortTicketSearch.trim() ? 'found' : 'starred'}
+                            </span>
                           </div>
 
                           {effortTicketSearchResults.map(t => {
@@ -2033,7 +2069,7 @@ export default function App() {
                                 className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between group"
                               >
                                 <div className="truncate pr-2 flex items-center gap-1.5">
-                                  <Star className="w-3.5 h-3.5 text-amber-400 fill-current shrink-0" />
+                                  <Star className={`w-3.5 h-3.5 shrink-0 ${t.starred ? 'text-amber-400 fill-current' : 'text-slate-600'}`} />
                                   <span className="font-mono font-bold text-blue-400 mr-1 shrink-0">#{t.id}</span>
                                   <span className="text-slate-300 font-medium truncate">{t.subject}</span>
                                 </div>
@@ -2081,7 +2117,7 @@ export default function App() {
 
                           {effortTicketSearchResults.length === 0 && effortTicketSearch && (
                             <div className="p-4 text-center text-xs text-[#64748b] space-y-2">
-                              <div>No starred tickets found matching "{effortTicketSearch}".</div>
+                              <div>No work packages found matching "{effortTicketSearch}".</div>
                               {hasValidTargetId && (
                                 <button
                                   type="button"
@@ -2495,44 +2531,12 @@ export default function App() {
           </div>
         )}
 
-        {/* Click-to-Zoom Image Lightbox Modal */}
-        {zoomedImageUrl && (
-          <div 
-            className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-200"
-            onClick={() => setZoomedImageUrl(null)}
-          >
-            <div className="absolute top-4 right-4 flex items-center gap-2">
-              <a 
-                href={zoomedImageUrl} 
-                target="_blank" 
-                rel="noreferrer" 
-                onClick={e => e.stopPropagation()}
-                className="p-2 bg-[#1e293b] text-slate-200 rounded-full hover:bg-slate-700 transition"
-                title="Open original image in new tab"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
-              <button 
-                onClick={() => setZoomedImageUrl(null)}
-                className="p-2 bg-[#1e293b] text-slate-200 rounded-full hover:bg-slate-700 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div 
-              className="max-w-full max-h-[85vh] overflow-auto flex items-center justify-center p-2"
-              onClick={e => e.stopPropagation()}
-            >
-              <img 
-                src={zoomedImageUrl} 
-                alt="Enlarged attachment" 
-                className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl border border-[#334155]"
-              />
-            </div>
-            <span className="text-[11px] text-[#94a3b8] font-mono mt-2">Tap anywhere outside to close</span>
-          </div>
-        )}
+        {/* Click-to-Zoom Image Lightbox Modal with Mobile Pinch & Pan */}
+        <ImageZoomModal
+          imageUrl={zoomedImageUrl}
+          onClose={() => setZoomedImageUrl(null)}
+          altText="Attachment Image"
+        />
       </div>
     );
 }
