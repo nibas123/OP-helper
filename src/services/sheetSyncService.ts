@@ -12,6 +12,10 @@ export interface SheetBackupData {
   tickets: LocalTicket[];
   efforts: LocalEffort[];
   currentUser: { id: string; name: string };
+  opConfig?: { url: string; apiKey?: string };
+  activeFilters?: any;
+  starredTicketIds?: number[];
+  appSettings?: any;
   lastSyncedAt?: string;
 }
 
@@ -163,6 +167,9 @@ export const sheetSyncService = {
     tickets: LocalTicket[];
     efforts: LocalEffort[];
     currentUser: { id: string; name: string };
+    activeFilters?: any;
+    starredTicketIds?: number[];
+    appSettings?: any;
   }): Promise<{ success: boolean; message?: string }> {
     const sheetUrl = this.getSheetUrl();
     const validation = validateSheetUrl(sheetUrl);
@@ -183,7 +190,10 @@ export const sheetSyncService = {
         types: data.types,
         views: data.views,
         tickets: data.tickets.slice(0, 300), // Protect against huge payloads
-        efforts: data.efforts
+        efforts: data.efforts,
+        activeFilters: data.activeFilters,
+        starredTicketIds: data.starredTicketIds,
+        appSettings: data.appSettings
       };
 
       const resJson = await sendToAppsScript(validation.cleanUrl, 'POST', payload);
@@ -240,6 +250,24 @@ export const sheetSyncService = {
       }
       if (payload.currentUser) {
         await db.setMeta('currentUser', payload.currentUser);
+      }
+      if (payload.activeFilters) {
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.setItem('op_saved_filter_state', JSON.stringify(payload.activeFilters));
+          }
+          await db.setMeta('activeFilters', payload.activeFilters);
+        } catch (e) {}
+      }
+      if (payload.starredTicketIds && payload.starredTicketIds.length > 0) {
+        const starSet = new Set(payload.starredTicketIds);
+        const allT = await db.getAllTickets();
+        for (const t of allT) {
+          const shouldStar = starSet.has(t.id);
+          if (!!t.starred !== shouldStar) {
+            await db.putTicket({ ...t, starred: shouldStar });
+          }
+        }
       }
 
       const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -344,6 +372,23 @@ export const sheetSyncService = {
         const localUser = await db.getMeta('currentUser');
         if (!localUser) await db.setMeta('currentUser', payload.currentUser);
       }
+      if (payload.activeFilters) {
+        try {
+          if (typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.setItem('op_saved_filter_state', JSON.stringify(payload.activeFilters));
+          }
+          await db.setMeta('activeFilters', payload.activeFilters);
+        } catch (e) {}
+      }
+      if (payload.starredTicketIds && payload.starredTicketIds.length > 0) {
+        const starSet = new Set(payload.starredTicketIds);
+        const allT = await db.getAllTickets();
+        for (const t of allT) {
+          if (starSet.has(t.id) && !t.starred) {
+            await db.putTicket({ ...t, starred: true });
+          }
+        }
+      }
 
       // 6. Push local efforts to Sheet if local has items not in Sheet
       const sheetEffortIds = new Set((payload.efforts || []).map(e => e.id));
@@ -357,6 +402,14 @@ export const sheetSyncService = {
         const freshViews = await db.getSavedViews();
         const freshUser = (await db.getMeta<{ id: string; name: string }>('currentUser')) || { id: '', name: '' };
 
+        let activeFiltersData = null;
+        try {
+          const rawF = typeof window !== 'undefined' ? window.localStorage.getItem('op_saved_filter_state') : null;
+          if (rawF) activeFiltersData = JSON.parse(rawF);
+        } catch (e) {}
+
+        const starredIds = freshTickets.filter(t => !!t.starred).map(t => t.id);
+
         await this.syncAllToSheet({
           projects: freshProjects,
           statuses: freshStatuses,
@@ -364,7 +417,9 @@ export const sheetSyncService = {
           views: freshViews,
           tickets: freshTickets,
           efforts: freshEfforts,
-          currentUser: freshUser
+          currentUser: freshUser,
+          activeFilters: activeFiltersData,
+          starredTicketIds: starredIds
         });
       }
 

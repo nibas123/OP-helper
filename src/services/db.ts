@@ -299,6 +299,31 @@ class LocalDatabase {
     return newStarred;
   }
 
+  async deleteTicket(id: number): Promise<void> {
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('tickets', 'readwrite');
+      const store = tx.objectStore('tickets');
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async deleteTickets(ids: number[]): Promise<void> {
+    if (ids.length === 0) return;
+    const db = await this.openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('tickets', 'readwrite');
+      const store = tx.objectStore('tickets');
+      for (const id of ids) {
+        store.delete(id);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   // --- Efforts ---
 
   async getAllEfforts(): Promise<LocalEffort[]> {

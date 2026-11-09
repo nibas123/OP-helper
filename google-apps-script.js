@@ -144,26 +144,63 @@ function saveAllDataToSheet(ss, payload) {
     effortsSheet.getRange(2, 1, effortRows.length, 8).setValues(effortRows);
   }
 
-  // 5. All Tickets Snapshot
+  // 5. All Tickets Snapshot (Excluding Dev Ops & IT tickets not assigned to current user)
   const ticketsSheet = getOrCreateSheet(ss, 'Tickets_Snapshot', [
     'Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent', 'Estimated', 'Updated At'
   ]);
   if (payload.tickets && payload.tickets.length > 0) {
+    const myName = (payload.currentUser && payload.currentUser.name) ? String(payload.currentUser.name).toLowerCase().trim() : 'nibas';
+    const myId = (payload.currentUser && payload.currentUser.id) ? String(payload.currentUser.id).trim() : '';
+
+    const eligibleTickets = payload.tickets.filter(t => {
+      const proj = String(t.project || '').toLowerCase();
+      const isDevOps = proj.includes('dev ops') || proj.includes('devops');
+      if (isDevOps) {
+        const assignee = String(t.assignee || '').toLowerCase().trim();
+        const assigneeId = String(t.assigneeId || '').trim();
+        const isMine = (myId && assigneeId === myId) || (myName && assignee.includes(myName)) || assignee.includes('nibas') || assignee === 'me';
+        return isMine;
+      }
+      return true;
+    });
+
     ticketsSheet.clearContents();
     ticketsSheet.appendRow(['Ticket #', 'Project', 'Subject', 'Status', 'Assignee', 'Spent', 'Estimated', 'Updated At']);
     formatHeaderRow(ticketsSheet, 8);
 
-    const ticketRows = payload.tickets.map(t => [
-      t.id,
-      t.project || '',
-      t.subject || '',
-      t.status || '',
-      t.assignee || 'Unassigned',
-      t.spentTime || '',
-      t.estimatedTime || '',
-      t.updatedAt || nowStr
-    ]);
-    ticketsSheet.getRange(2, 1, ticketRows.length, 8).setValues(ticketRows);
+    if (eligibleTickets.length > 0) {
+      const ticketRows = eligibleTickets.map(t => [
+        t.id,
+        t.project || '',
+        t.subject || '',
+        t.status || '',
+        t.assignee || 'Unassigned',
+        t.spentTime || '',
+        t.estimatedTime || '',
+        t.updatedAt || nowStr
+      ]);
+      ticketsSheet.getRange(2, 1, ticketRows.length, 8).setValues(ticketRows);
+    }
+  }
+
+  // 6. System & Filter Configurations (Google Sheet as the Single Source of Truth)
+  const filtersSheet = getOrCreateSheet(ss, 'Config_Filters', ['Key', 'Value (JSON)', 'Updated At']);
+  filtersSheet.clearContents();
+  filtersSheet.appendRow(['Key', 'Value (JSON)', 'Updated At']);
+  formatHeaderRow(filtersSheet, 3);
+
+  const filterRows = [];
+  if (payload.activeFilters) {
+    filterRows.push(['ActiveFilters', JSON.stringify(payload.activeFilters), nowStr]);
+  }
+  if (payload.starredTicketIds) {
+    filterRows.push(['StarredTickets', JSON.stringify(payload.starredTicketIds), nowStr]);
+  }
+  if (payload.appSettings) {
+    filterRows.push(['AppSettings', JSON.stringify(payload.appSettings), nowStr]);
+  }
+  if (filterRows.length > 0) {
+    filtersSheet.getRange(2, 1, filterRows.length, 3).setValues(filterRows);
   }
 }
 
@@ -315,7 +352,10 @@ function restoreAllDataFromSheet(ss) {
     views: [],
     tickets: [],
     efforts: [],
-    currentUser: null
+    currentUser: null,
+    activeFilters: null,
+    starredTicketIds: [],
+    appSettings: null
   };
 
   // 1. Static Config
@@ -396,6 +436,26 @@ function restoreAllDataFromSheet(ss) {
         updatedAt: String(row[7]),
         pendingSync: false
       });
+    });
+  }
+
+  // 5. Active Filters & System Config (Single Source of Truth)
+  const filtersSheet = ss.getSheetByName('Config_Filters');
+  if (filtersSheet && filtersSheet.getLastRow() > 1) {
+    const data = filtersSheet.getRange(2, 1, filtersSheet.getLastRow() - 1, 3).getValues();
+    data.forEach(row => {
+      const key = String(row[0]).trim();
+      const valStr = String(row[1]).trim();
+      try {
+        const parsed = JSON.parse(valStr);
+        if (key === 'ActiveFilters') {
+          result.activeFilters = parsed;
+        } else if (key === 'StarredTickets') {
+          result.starredTicketIds = parsed;
+        } else if (key === 'AppSettings') {
+          result.appSettings = parsed;
+        }
+      } catch (e) {}
     });
   }
 

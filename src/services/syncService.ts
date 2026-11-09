@@ -1,6 +1,7 @@
 import { OpenProjectService } from './OpenProjectService';
 import { db, type LocalTicket, type LocalEffort, type SyncQueueItem } from './db';
 import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
+import { shouldIncludeTicket } from '../utils/devOpsFilter';
 
 export interface SyncStatus {
   state: 'idle' | 'syncing' | 'synced' | 'error' | 'offline';
@@ -74,7 +75,35 @@ export const syncService = {
   async processQueueItem(item: SyncQueueItem): Promise<void> {
     if (item.type === 'UPDATE_STATUS') {
       try {
-        await OpenProjectService.updateWorkPackageStatus(
+        // PRE-VERIFICATION: Verify ticket with live OP fetch before mutating to prevent 409 conflicts
+        try {
+          const live = await OpenProjectService.getWorkPackage(Number(item.payload.ticketId));
+          if (live) {
+            const liveStatusHref = live._links?.status?.href || '';
+            const liveStatusId = liveStatusHref.split('/').pop() || '';
+            if (String(liveStatusId) === String(item.payload.statusId)) {
+              console.log(`[Sync] Pre-verification: Ticket #${item.payload.ticketId} is already in status (${live._links?.status?.title || liveStatusId}). Resolving outbox item without redundant mutation.`);
+              await db.removeSyncItem(item.id);
+              const t = await db.getTicket(Number(item.payload.ticketId));
+              if (t) {
+                await db.putTicket({
+                  ...t,
+                  statusId: String(liveStatusId),
+                  status: live._links?.status?.title || t.status,
+                  lockVersion: live.lockVersion,
+                  pendingSync: false
+                });
+              }
+              return;
+            }
+            // Use verified latest lockVersion from live ticket
+            item.payload.lockVersion = live.lockVersion;
+          }
+        } catch (verifErr) {
+          console.warn(`[Sync] Pre-verification fetch for ticket #${item.payload.ticketId} status update returned warning, proceeding with queued payload:`, verifErr);
+        }
+
+        const updated = await OpenProjectService.updateWorkPackageStatus(
           item.payload.ticketId,
           item.payload.statusId,
           item.payload.lockVersion
@@ -82,15 +111,19 @@ export const syncService = {
         await db.removeSyncItem(item.id);
         const t = await db.getTicket(Number(item.payload.ticketId));
         if (t) {
-          await db.putTicket({ ...t, pendingSync: false });
+          await db.putTicket({
+            ...t,
+            statusId: item.payload.statusId,
+            status: updated?._links?.status?.title || t.status,
+            lockVersion: updated?.lockVersion ?? ((t.lockVersion || 1) + 1),
+            pendingSync: false
+          });
         }
       } catch (err: any) {
         if (is409Conflict(err)) {
-          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} status update. Fetching latest ticket details...`);
-          // 1. Fetch latest details from OpenProject
+          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} status update. Re-fetching latest ticket details...`);
           const latest = await this.fetchAndCacheSingleTicket(Number(item.payload.ticketId));
           if (latest) {
-            // 2. Compare latest server status with outbox item desired status
             if (String(latest.statusId) === String(item.payload.statusId)) {
               console.log(`[Sync] Ticket #${item.payload.ticketId} is already in desired status (${latest.status}). Resolving conflict.`);
               await db.removeSyncItem(item.id);
@@ -101,7 +134,6 @@ export const syncService = {
               return;
             }
 
-            // 3. Status differs: update lockVersion from latest and push again
             console.log(`[Sync] Conflict: Updating lockVersion from ${item.payload.lockVersion} to ${latest.lockVersion} and re-pushing status...`);
             item.payload.lockVersion = latest.lockVersion;
             await db.enqueueSyncItem(item);
@@ -130,7 +162,36 @@ export const syncService = {
       }
     } else if (item.type === 'UPDATE_ASSIGNEE') {
       try {
-        await OpenProjectService.updateWorkPackageAssignee(
+        // PRE-VERIFICATION: Verify ticket with live OP fetch before mutating to prevent 409 conflicts
+        try {
+          const live = await OpenProjectService.getWorkPackage(Number(item.payload.ticketId));
+          if (live) {
+            const liveAssigneeHref = live._links?.assignee?.href || '';
+            const liveAssigneeId = liveAssigneeHref.split('/').pop() || '';
+            const desiredAssigneeId = String(item.payload.assigneeId || '');
+            if (liveAssigneeId === desiredAssigneeId) {
+              console.log(`[Sync] Pre-verification: Ticket #${item.payload.ticketId} is already assigned to desired assignee. Resolving outbox item.`);
+              await db.removeSyncItem(item.id);
+              const t = await db.getTicket(Number(item.payload.ticketId));
+              if (t) {
+                await db.putTicket({
+                  ...t,
+                  assigneeId: item.payload.assigneeId,
+                  assignee: live._links?.assignee?.title || t.assignee,
+                  lockVersion: live.lockVersion,
+                  pendingSync: false
+                });
+              }
+              return;
+            }
+            // Use verified latest lockVersion from live ticket
+            item.payload.lockVersion = live.lockVersion;
+          }
+        } catch (verifErr) {
+          console.warn(`[Sync] Pre-verification fetch for ticket #${item.payload.ticketId} assignee update returned warning, proceeding with queued payload:`, verifErr);
+        }
+
+        const updated = await OpenProjectService.updateWorkPackageAssignee(
           item.payload.ticketId,
           item.payload.assigneeId,
           item.payload.lockVersion
@@ -138,15 +199,19 @@ export const syncService = {
         await db.removeSyncItem(item.id);
         const t = await db.getTicket(Number(item.payload.ticketId));
         if (t) {
-          await db.putTicket({ ...t, pendingSync: false });
+          await db.putTicket({
+            ...t,
+            assigneeId: item.payload.assigneeId,
+            assignee: updated?._links?.assignee?.title || t.assignee,
+            lockVersion: updated?.lockVersion ?? ((t.lockVersion || 1) + 1),
+            pendingSync: false
+          });
         }
       } catch (err: any) {
         if (is409Conflict(err)) {
-          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} assignee update. Fetching latest ticket details...`);
-          // 1. Fetch latest details from OpenProject
+          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} assignee update. Re-fetching latest ticket details...`);
           const latest = await this.fetchAndCacheSingleTicket(Number(item.payload.ticketId));
           if (latest) {
-            // 2. Compare latest server assignee with outbox item desired assignee
             const desiredAssigneeId = String(item.payload.assigneeId || '');
             const currentAssigneeId = String(latest.assigneeId || '');
             if (desiredAssigneeId === currentAssigneeId) {
@@ -159,7 +224,6 @@ export const syncService = {
               return;
             }
 
-            // 3. Assignee differs: update lockVersion from latest and push again
             console.log(`[Sync] Conflict: Updating lockVersion from ${item.payload.lockVersion} to ${latest.lockVersion} and re-pushing assignee...`);
             item.payload.lockVersion = latest.lockVersion;
             await db.enqueueSyncItem(item);
@@ -187,6 +251,17 @@ export const syncService = {
         throw err;
       }
     } else if (item.type === 'LOG_TIME') {
+      // PRE-VERIFICATION: Verify ticket exists on OP before submitting time log
+      let liveTicket = null;
+      try {
+        liveTicket = await OpenProjectService.getWorkPackage(Number(item.payload.ticketId));
+        if (liveTicket) {
+          console.log(`[Sync] Pre-verification: Confirmed ticket #${item.payload.ticketId} exists on OP (${liveTicket.subject}).`);
+        }
+      } catch (verifErr) {
+        console.warn(`[Sync] Pre-verification fetch for ticket #${item.payload.ticketId} time log warning:`, verifErr);
+      }
+
       await OpenProjectService.logTime(
         item.payload.ticketId,
         item.payload.hours,
@@ -202,6 +277,19 @@ export const syncService = {
       );
       if (match) {
         await db.putEffort({ ...match, pendingSync: false });
+      }
+
+      // Re-fetch ticket from OP to refresh total spentTime and lockVersion in local DB
+      if (liveTicket) {
+        try {
+          const fresh = await OpenProjectService.getWorkPackage(Number(item.payload.ticketId));
+          if (fresh && fresh.spentTime) {
+            const t = await db.getTicket(Number(item.payload.ticketId));
+            if (t) {
+              await db.putTicket({ ...t, spentTime: fresh.spentTime, lockVersion: fresh.lockVersion });
+            }
+          }
+        } catch {}
       }
     } else if (item.type === 'UPDATE_TIME') {
       await OpenProjectService.updateTimeEntry(
@@ -339,11 +427,15 @@ export const syncService = {
         };
       });
 
+      // DEV OPS & IT RULE: Dev Ops & IT tickets should ONLY be saved if assigned to current user
+      const currentUserMeta = await db.getMeta<{ id: string; name: string }>('currentUser');
+      const eligibleRemoteTickets = remoteTickets.filter(remote => shouldIncludeTicket(remote, currentUserMeta));
+
       // Retrieve existing local tickets to check for pending local mutations
       const localTickets = await db.getAllTickets();
       const localMap = new Map(localTickets.map(t => [t.id, t]));
 
-      const mergedTickets = remoteTickets.map(remote => {
+      const mergedTickets = eligibleRemoteTickets.map(remote => {
         const existing = localMap.get(remote.id);
         const isStarred = existing ? !!existing.starred : false;
 
@@ -367,6 +459,15 @@ export const syncService = {
       });
 
       await db.putTickets(mergedTickets);
+
+      // Prune any existing Dev Ops & IT tickets from local DB that are not assigned to current user
+      const toDeleteIds = localTickets
+        .filter(t => !shouldIncludeTicket(t, currentUserMeta))
+        .map(t => t.id);
+      if (toDeleteIds.length > 0) {
+        console.log(`[Sync] Pruning ${toDeleteIds.length} Dev Ops & IT tickets not assigned to me from local DB:`, toDeleteIds);
+        await db.deleteTickets(toDeleteIds);
+      }
 
       // Supplementary project assignees: derive from tickets if API 403'd
       const allTickets = await db.getAllTickets();
@@ -473,6 +574,13 @@ export const syncService = {
         starred: existing ? existing.starred : false
       };
 
+      // DEV OPS & IT RULE: Dev Ops & IT tickets should ONLY be saved if assigned to me
+      const currentUserMeta = await db.getMeta<{ id: string; name: string }>('currentUser');
+      if (!shouldIncludeTicket(ticket, currentUserMeta)) {
+        console.log(`[Sync] Ticket #${ticket.id} belongs to Dev Ops & IT and is not assigned to current user. Skipping save.`);
+        return null;
+      }
+
       await db.putTicket(ticket);
       return ticket;
     } catch (err) {
@@ -529,6 +637,13 @@ export const syncService = {
           updatedAt: item.updatedAt || new Date().toISOString(),
           pendingSync: false
         };
+
+        // DEV OPS & IT RULE: Dev Ops & IT tickets should ONLY be added/saved if assigned to me
+        const currentUserMeta = await db.getMeta<{ id: string; name: string }>('currentUser');
+        if (!shouldIncludeTicket(ticket, currentUserMeta)) {
+          console.log(`[Sync] Remote search result #${ticket.id} belongs to Dev Ops & IT and is not assigned to current user. Skipping.`);
+          continue;
+        }
 
         await db.putTicket(ticket);
         newTickets.push(ticket);

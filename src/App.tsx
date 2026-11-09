@@ -32,6 +32,7 @@ import { syncService, parseDurationToHours, is409Conflict } from './services/syn
 import { sheetSyncService } from './services/sheetSyncService';
 import { OpenProjectService } from './services/OpenProjectService';
 import { extractTicketIdFromUrlOrText } from './utils/urlParser';
+import { shouldIncludeTicket } from './utils/devOpsFilter';
 import { DEFAULT_STATUSES, DEFAULT_PRIORITIES } from './constants/opDefaults';
 
 // Helper to get 5-day work week (Monday - Friday, excluding Sat & Sun)
@@ -697,6 +698,11 @@ export default function App() {
         ticket = await syncService.fetchAndCacheSingleTicket(targetId);
       }
       if (ticket) {
+        // DEV OPS & IT RULE: Dev Ops & IT tickets should ONLY be added/shown if assigned to me
+        if (!shouldIncludeTicket(ticket, currentUser)) {
+          setEffortTicketFetchError(`Ticket #${targetId} is in Dev Ops & IT and is not assigned to you.`);
+          return;
+        }
         setEffortSelectedTicket(ticket);
         setTickets(prev => prev.some(t => t.id === ticket!.id) ? prev.map(t => t.id === ticket!.id ? ticket! : t) : [ticket!, ...prev]);
         setEffortTicketSearch('');
@@ -774,6 +780,11 @@ export default function App() {
     let syncedImmediately = false;
     if (navigator.onLine) {
       try {
+        // PRE-VERIFICATION: Verify ticket on OP before logging time
+        const live = await OpenProjectService.getWorkPackage(targetTicketId);
+        if (live) {
+          console.log(`[Effort] Pre-verification: Verified ticket #${targetTicketId} on OP.`);
+        }
         await OpenProjectService.logTime(targetTicketId, hoursDuration, newEffort.comment, dateStr);
         newEffort.pendingSync = false;
         await db.putEffort(newEffort);
@@ -782,6 +793,24 @@ export default function App() {
           setTicketEffortsList(prev => prev.map(e => e.id === newEffort.id ? { ...e, pendingSync: false } : e));
         }
         syncedImmediately = true;
+
+        // Refresh live spentTime from OP
+        if (live) {
+          try {
+            const fresh = await OpenProjectService.getWorkPackage(targetTicketId);
+            if (fresh && fresh.spentTime) {
+              const currentTicket = tickets.find(item => item.id === targetTicketId);
+              const updatedTicket: LocalTicket = {
+                ...(currentTicket || { id: targetTicketId, subject: ticketSubject, project: '', status: '', statusId: '', priority: '', assignee: '', lockVersion: 1, updatedAt: new Date().toISOString() }),
+                spentTime: fresh.spentTime,
+                lockVersion: fresh.lockVersion,
+                pendingSync: false
+              };
+              await db.putTicket(updatedTicket);
+              setTickets(prev => prev.map(item => item.id === targetTicketId ? updatedTicket : item));
+            }
+          } catch {}
+        }
       } catch (err) {
         console.warn('[Effort] Immediate sync failed, enqueuing for sync:', err);
       }
@@ -1046,14 +1075,33 @@ export default function App() {
     showEphemeralNotice('Syncing all data to Google Sheet...');
 
     try {
+      const activeFilters: PersistedFilterState = {
+        filterProjects,
+        filterStatuses,
+        filterStatusCategory,
+        filterTypes,
+        filterAssignees,
+        filterPriorities,
+        filterStarredOnly,
+        sortBy,
+        activeViewId
+      };
+      const starredIds = tickets.filter(t => !!t.starred).map(t => t.id);
+
       const res = await sheetSyncService.syncAllToSheet({
         projects: projectsList,
         statuses,
         types,
         views: savedViews,
-        tickets,
+        tickets: tickets.filter(t => shouldIncludeTicket(t, currentUser)),
         efforts: allEfforts,
-        currentUser
+        currentUser,
+        activeFilters,
+        starredTicketIds: starredIds,
+        appSettings: {
+          isInspectorFullView: localStorage.getItem('op_inspector_full_view') === 'true',
+          activeTab: localStorage.getItem('op_active_tab') || 'tickets'
+        }
       });
 
       if (res.success) {
@@ -1090,8 +1138,24 @@ export default function App() {
         if (res.data.views && res.data.views.length > 0) setSavedViews(res.data.views);
         if (res.data.efforts && res.data.efforts.length > 0) setAllEfforts(res.data.efforts);
         if (res.data.currentUser) setCurrentUser(res.data.currentUser);
+
+        // Restore filter configuration from Google Sheet (single source of truth)
+        if (res.data.activeFilters) {
+          const f = res.data.activeFilters;
+          if (Array.isArray(f.filterProjects)) setFilterProjects(f.filterProjects);
+          if (Array.isArray(f.filterStatuses)) setFilterStatuses(f.filterStatuses);
+          if (f.filterStatusCategory) setFilterStatusCategory(f.filterStatusCategory);
+          if (Array.isArray(f.filterTypes)) setFilterTypes(f.filterTypes);
+          if (Array.isArray(f.filterAssignees)) setFilterAssignees(f.filterAssignees);
+          if (Array.isArray(f.filterPriorities)) setFilterPriorities(f.filterPriorities);
+          if (typeof f.filterStarredOnly === 'boolean') setFilterStarredOnly(f.filterStarredOnly);
+          if (f.sortBy) setSortBy(f.sortBy);
+          if (f.activeViewId) setActiveViewId(f.activeViewId);
+        }
+
+        await loadLocalData();
         setSheetLastSyncTime(sheetSyncService.getLastSyncTime());
-        showEphemeralNotice('Data fully restored from Google Sheet!');
+        showEphemeralNotice('Data & filter configs fully restored from Google Sheet!');
       } else {
         showEphemeralNotice(res.message || 'Failed to restore data from Sheet');
       }
@@ -1407,6 +1471,11 @@ export default function App() {
     const normalizeText = (text: string) => text.toLowerCase().replace(/[\s\-_]+/g, '');
 
     const result = tickets.filter(t => {
+      // DEV OPS & IT RULE: Dev Ops & IT tickets should ONLY be shown if assigned to me, else hide by default
+      if (!shouldIncludeTicket(t, currentUser)) {
+        return false;
+      }
+
       // If user searched for an exact ticket ID or URL, match it directly
       if (extractedId && t.id === extractedId) {
         return true;
@@ -1772,9 +1841,11 @@ export default function App() {
           }}
           onAddCommentSubmit={async (ticketId, comment) => {
             if (!ticketId || !comment.trim()) return;
-            const target = tickets.find(t => t.id === ticketId);
             try {
-              await OpenProjectService.addComment(String(ticketId), comment, target?.lockVersion ?? 1);
+              // PRE-VERIFICATION: Verify ticket with live OP fetch before submitting comment
+              const live = await OpenProjectService.getWorkPackage(ticketId);
+              const lockVer = live?.lockVersion ?? 1;
+              await OpenProjectService.addComment(String(ticketId), comment, lockVer);
               showEphemeralNotice('Comment posted to OpenProject');
               await fetchTicketActivities(ticketId);
             } catch (err: any) {
