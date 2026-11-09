@@ -96,15 +96,59 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchingRemote, setIsSearchingRemote] = useState(false);
 
-  // Filter & Search states
-  const [filterProjects, setFilterProjects] = useState<string[]>([]); // Multiple selected projects
-  const [filterStatuses, setFilterStatuses] = useState<string[]>([]); // Multiple selected status IDs
-  const [filterStatusCategory, setFilterStatusCategory] = useState<'all' | 'open' | 'closed'>('open');
-  const [filterTypes, setFilterTypes] = useState<string[]>([]); // Multiple selected types
-  const [filterAssignees, setFilterAssignees] = useState<string[]>([]); // Multiple selected assignees
-  const [filterPriorities, setFilterPriorities] = useState<string[]>([]); // Multiple selected priorities
-  const [filterStarredOnly, setFilterStarredOnly] = useState<boolean>(false);
-  const [sortBy, setSortBy] = useState<'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority'>('updated_desc');
+  // Persisted Filter State interface & helper
+  interface PersistedFilterState {
+    filterProjects: string[];
+    filterStatuses: string[];
+    filterStatusCategory: 'all' | 'open' | 'closed';
+    filterTypes: string[];
+    filterAssignees: string[];
+    filterPriorities: string[];
+    filterStarredOnly: boolean;
+    sortBy: 'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority';
+    activeViewId?: string;
+  }
+
+  const getPersistedFilterState = (): PersistedFilterState | null => {
+    try {
+      const raw = localStorage.getItem('op_saved_filter_state');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return parsed;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load filter state from localStorage:', err);
+    }
+    return null;
+  };
+
+  // Filter & Search states (persisted across refresh)
+  const [filterProjects, setFilterProjects] = useState<string[]>(() => {
+    return getPersistedFilterState()?.filterProjects || [];
+  });
+  const [filterStatuses, setFilterStatuses] = useState<string[]>(() => {
+    return getPersistedFilterState()?.filterStatuses || [];
+  });
+  const [filterStatusCategory, setFilterStatusCategory] = useState<'all' | 'open' | 'closed'>(() => {
+    return getPersistedFilterState()?.filterStatusCategory || 'open';
+  });
+  const [filterTypes, setFilterTypes] = useState<string[]>(() => {
+    return getPersistedFilterState()?.filterTypes || [];
+  });
+  const [filterAssignees, setFilterAssignees] = useState<string[]>(() => {
+    return getPersistedFilterState()?.filterAssignees || [];
+  });
+  const [filterPriorities, setFilterPriorities] = useState<string[]>(() => {
+    return getPersistedFilterState()?.filterPriorities || [];
+  });
+  const [filterStarredOnly, setFilterStarredOnly] = useState<boolean>(() => {
+    return !!getPersistedFilterState()?.filterStarredOnly;
+  });
+  const [sortBy, setSortBy] = useState<'updated_desc' | 'updated_asc' | 'id_desc' | 'id_asc' | 'priority'>(() => {
+    return getPersistedFilterState()?.sortBy || 'updated_desc';
+  });
   const [effortSearchQuery, setEffortSearchQuery] = useState('');
 
   // Activities & Comments state
@@ -131,7 +175,9 @@ export default function App() {
 
   // Saved Views State (OpenProject Views feature)
   const [savedViews, setSavedViews] = useState<SavedView[]>(DEFAULT_SAVED_VIEWS);
-  const [activeViewId, setActiveViewId] = useState<string>('sys_all_open');
+  const [activeViewId, setActiveViewId] = useState<string>(() => {
+    return getPersistedFilterState()?.activeViewId || 'sys_all_open';
+  });
   const [isSaveViewModalOpen, setIsSaveViewModalOpen] = useState(false);
   const [newViewName, setNewViewName] = useState('');
 
@@ -190,27 +236,44 @@ export default function App() {
       const views = await db.getSavedViews();
       setSavedViews(views);
 
-      // Auto-activate the default view (marked as default or saved in meta)
-      const defaultMetaId = await db.getMeta<string>('defaultViewId');
-      const targetDefault = views.find(v => v.id === defaultMetaId) || views.find(v => v.isDefault) || views[0];
-      if (targetDefault) {
-        setActiveViewId(targetDefault.id);
-        const f = targetDefault.filters;
-        setFilterStatusCategory(f.statusCategory || 'all');
-        if (f.statusIds && f.statusIds.length > 0) setFilterStatuses(f.statusIds);
-        else if (f.statusId) setFilterStatuses([f.statusId]);
-        else setFilterStatuses([]);
+      // Check if user already has a saved filter state in localStorage or IndexedDB
+      const savedInStorage = getPersistedFilterState();
+      const savedInDB = await db.getMeta<PersistedFilterState>('activeFilterState');
+      const activeSaved = savedInStorage || savedInDB;
 
-        if (f.projects && f.projects.length > 0) setFilterProjects(f.projects);
-        else if (f.project) setFilterProjects([f.project]);
-        else if (f.projectId) setFilterProjects([f.projectId]);
-        else setFilterProjects([]);
+      if (activeSaved) {
+        if (activeSaved.activeViewId) setActiveViewId(activeSaved.activeViewId);
+        setFilterStatusCategory(activeSaved.filterStatusCategory || 'open');
+        setFilterStatuses(activeSaved.filterStatuses || []);
+        setFilterProjects(activeSaved.filterProjects || []);
+        setFilterTypes(activeSaved.filterTypes || []);
+        setFilterAssignees(activeSaved.filterAssignees || []);
+        setFilterPriorities(activeSaved.filterPriorities || []);
+        setFilterStarredOnly(!!activeSaved.filterStarredOnly);
+        setSortBy(activeSaved.sortBy || 'updated_desc');
+      } else {
+        // Auto-activate the default view only if no filter state was ever saved
+        const defaultMetaId = await db.getMeta<string>('defaultViewId');
+        const targetDefault = views.find(v => v.id === defaultMetaId) || views.find(v => v.isDefault) || views[0];
+        if (targetDefault) {
+          setActiveViewId(targetDefault.id);
+          const f = targetDefault.filters;
+          setFilterStatusCategory(f.statusCategory || 'open');
+          if (f.statusIds && f.statusIds.length > 0) setFilterStatuses(f.statusIds);
+          else if (f.statusId) setFilterStatuses([f.statusId]);
+          else setFilterStatuses([]);
 
-        setFilterTypes(f.types && f.types.length > 0 ? f.types : (f.type ? [f.type] : []));
-        setFilterAssignees(f.assignees && f.assignees.length > 0 ? f.assignees : (f.assignee ? [f.assignee] : []));
-        setFilterPriorities(f.priorities && f.priorities.length > 0 ? f.priorities : (f.priority ? [f.priority] : []));
-        setFilterStarredOnly(!!f.starredOnly);
-        setSortBy(f.sortBy || 'updated_desc');
+          if (f.projects && f.projects.length > 0) setFilterProjects(f.projects);
+          else if (f.project) setFilterProjects([f.project]);
+          else if (f.projectId) setFilterProjects([f.projectId]);
+          else setFilterProjects([]);
+
+          setFilterTypes(f.types && f.types.length > 0 ? f.types : (f.type ? [f.type] : []));
+          setFilterAssignees(f.assignees && f.assignees.length > 0 ? f.assignees : (f.assignee ? [f.assignee] : []));
+          setFilterPriorities(f.priorities && f.priorities.length > 0 ? f.priorities : (f.priority ? [f.priority] : []));
+          setFilterStarredOnly(!!f.starredOnly);
+          setSortBy(f.sortBy || 'updated_desc');
+        }
       }
 
       const efforts = await db.getAllEfforts();
@@ -257,6 +320,39 @@ export default function App() {
       console.error('[DB] Failed to load local records:', err);
     }
   }, []);
+
+  // Auto-persist active filters to localStorage and IndexedDB so they never get lost after refresh
+  useEffect(() => {
+    const stateToSave: PersistedFilterState = {
+      filterProjects,
+      filterStatuses,
+      filterStatusCategory,
+      filterTypes,
+      filterAssignees,
+      filterPriorities,
+      filterStarredOnly,
+      sortBy,
+      activeViewId
+    };
+
+    try {
+      localStorage.setItem('op_saved_filter_state', JSON.stringify(stateToSave));
+    } catch (e) {
+      console.warn('Failed to save filters to localStorage:', e);
+    }
+
+    db.setMeta('activeFilterState', stateToSave).catch(console.error);
+  }, [
+    filterProjects,
+    filterStatuses,
+    filterStatusCategory,
+    filterTypes,
+    filterAssignees,
+    filterPriorities,
+    filterStarredOnly,
+    sortBy,
+    activeViewId
+  ]);
 
   // --- Network Sync ---
   const handleSync = useCallback(async (showNotice = false) => {
@@ -1294,9 +1390,9 @@ export default function App() {
       setFilterProjects([]);
     }
 
-    setFilterTypes(f.type ? [f.type] : []);
-    setFilterAssignees(f.assignee ? [f.assignee] : []);
-    setFilterPriorities(f.priority ? [f.priority] : []);
+    setFilterTypes(f.types && f.types.length > 0 ? f.types : (f.type ? [f.type] : []));
+    setFilterAssignees(f.assignees && f.assignees.length > 0 ? f.assignees : (f.assignee ? [f.assignee] : []));
+    setFilterPriorities(f.priorities && f.priorities.length > 0 ? f.priorities : (f.priority ? [f.priority] : []));
     setFilterStarredOnly(!!f.starredOnly);
     setSortBy(f.sortBy || 'updated_desc');
 
@@ -1595,6 +1691,7 @@ export default function App() {
     setFilterAssignees([]);
     setFilterPriorities([]);
     setFilterStarredOnly(false);
+    setActiveViewId('custom');
   };
 
   // --- Responsive SaaS Website Workspace ---

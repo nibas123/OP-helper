@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   FolderKanban,
   Clock,
@@ -267,7 +267,21 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   };
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'sheet' | 'settings'>('tickets');
+  const [activeTab, setActiveTab] = useState<'tickets' | 'efforts' | 'sheet' | 'settings'>(() => {
+    try {
+      const saved = localStorage.getItem('op_active_tab');
+      if (saved && ['tickets', 'efforts', 'sheet', 'settings'].includes(saved)) {
+        return saved as any;
+      }
+    } catch (e) {}
+    return 'tickets';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('op_active_tab', activeTab);
+    } catch (e) {}
+  }, [activeTab]);
   const [inspectorTab, setInspectorTab] = useState<'details' | 'efforts' | 'comments'>('details');
   const [copiedId, setCopiedId] = useState(false);
   const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
