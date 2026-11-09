@@ -12,9 +12,12 @@ import {
   Check, 
   Loader2, 
   AlertCircle, 
-  Pencil 
+  Pencil,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import DesktopWorkspace from './components/DesktopWorkspace';
+import { useResizableWindow } from './hooks/useResizableWindow';
 import { 
   db, 
   type LocalTicket, 
@@ -180,6 +183,31 @@ export default function App() {
   });
   const [isSaveViewModalOpen, setIsSaveViewModalOpen] = useState(false);
   const [newViewName, setNewViewName] = useState('');
+
+  // Resizable Modal Windows
+  const logEffortModalWindow = useResizableWindow({
+    storageKey: 'op_modal_log_effort_size',
+    defaultWidth: 540,
+    defaultHeight: 640,
+    minWidth: 400,
+    minHeight: 380
+  });
+
+  const editEffortModalWindow = useResizableWindow({
+    storageKey: 'op_modal_edit_effort_size',
+    defaultWidth: 500,
+    defaultHeight: 520,
+    minWidth: 400,
+    minHeight: 350
+  });
+
+  const saveViewModalWindow = useResizableWindow({
+    storageKey: 'op_modal_save_view_size',
+    defaultWidth: 420,
+    defaultHeight: 340,
+    minWidth: 350,
+    minHeight: 280
+  });
 
   const [newViewFavorite, setNewViewFavorite] = useState(true);
   const [newViewDefault, setNewViewDefault] = useState(false);
@@ -1868,7 +1896,8 @@ export default function App() {
             onClick={() => setIsAddEffortModalOpen(false)}
           >
             <div 
-              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+              style={logEffortModalWindow.modalStyle}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden relative select-text"
               onClick={e => e.stopPropagation()}
             >
               <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
@@ -1876,9 +1905,19 @@ export default function App() {
                   <Clock className="w-4 h-4 text-emerald-400" />
                   <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Log Time Effort</h3>
                 </div>
-                <button onClick={() => setIsAddEffortModalOpen(false)} className="p-1 text-[#64748b] hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={logEffortModalWindow.toggleMaximize}
+                    className="p-1 text-[#64748b] hover:text-white hover:bg-[#1e293b] rounded transition"
+                    title={logEffortModalWindow.isMaximized ? "Restore window size" : "Maximize window"}
+                  >
+                    {logEffortModalWindow.isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+                  <button onClick={() => setIsAddEffortModalOpen(false)} className="p-1 text-[#64748b] hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain">
@@ -2256,6 +2295,22 @@ export default function App() {
                   <span>{isLoggingEffort ? 'Logging Effort...' : `Confirm & Log ${parseFloat(effortModalHours) || 0}h`}</span>
                 </button>
               </div>
+
+              {/* Corner Resize Grip */}
+              {!logEffortModalWindow.isMaximized && (
+                <div
+                  onMouseDown={logEffortModalWindow.handleResizeStart}
+                  onDoubleClick={logEffortModalWindow.resetSize}
+                  className="absolute bottom-1 right-1 w-4 h-4 cursor-se-resize flex items-end justify-end p-0.5 text-[#64748b] hover:text-emerald-400 active:text-emerald-500 transition-colors z-20 group select-none"
+                  title="Drag corner to resize window (Double-click to reset)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" className="stroke-current fill-none stroke-2 opacity-60 group-hover:opacity-100">
+                    <line x1="8" y1="2" x2="2" y2="8" />
+                    <line x1="8" y1="5" x2="5" y2="8" />
+                    <line x1="8" y1="8" x2="8" y2="8" />
+                  </svg>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2267,7 +2322,8 @@ export default function App() {
             onClick={() => setEditingEffort(null)}
           >
             <div 
-              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+              style={editEffortModalWindow.modalStyle}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden relative select-text"
               onClick={e => e.stopPropagation()}
             >
               <div className="p-3.5 border-b border-[#1e293b] flex items-center justify-between shrink-0">
@@ -2275,9 +2331,19 @@ export default function App() {
                   <Pencil className="w-4 h-4 text-blue-400" />
                   <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Edit Logged Effort</h3>
                 </div>
-                <button onClick={() => setEditingEffort(null)} className="p-1 text-[#64748b] hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={editEffortModalWindow.toggleMaximize}
+                    className="p-1 text-[#64748b] hover:text-white hover:bg-[#1e293b] rounded transition"
+                    title={editEffortModalWindow.isMaximized ? "Restore window size" : "Maximize window"}
+                  >
+                    {editEffortModalWindow.isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+                  <button onClick={() => setEditingEffort(null)} className="p-1 text-[#64748b] hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain">
@@ -2388,6 +2454,22 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {/* Corner Resize Grip */}
+              {!editEffortModalWindow.isMaximized && (
+                <div
+                  onMouseDown={editEffortModalWindow.handleResizeStart}
+                  onDoubleClick={editEffortModalWindow.resetSize}
+                  className="absolute bottom-1 right-1 w-4 h-4 cursor-se-resize flex items-end justify-end p-0.5 text-[#64748b] hover:text-blue-400 active:text-blue-500 transition-colors z-20 group select-none"
+                  title="Drag corner to resize window (Double-click to reset)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" className="stroke-current fill-none stroke-2 opacity-60 group-hover:opacity-100">
+                    <line x1="8" y1="2" x2="2" y2="8" />
+                    <line x1="8" y1="5" x2="5" y2="8" />
+                    <line x1="8" y1="8" x2="8" y2="8" />
+                  </svg>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2399,17 +2481,28 @@ export default function App() {
             onClick={() => setIsSaveViewModalOpen(false)}
           >
             <div 
-              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full max-w-sm p-4 space-y-3.5 shadow-2xl overflow-y-auto max-h-[90vh]"
+              style={saveViewModalWindow.modalStyle}
+              className="bg-[#0f172a] border border-[#1e293b] rounded-2xl w-full flex flex-col p-4 space-y-3.5 shadow-2xl overflow-y-auto relative select-text"
               onClick={e => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-[#1e293b] pb-2">
+              <div className="flex items-center justify-between border-b border-[#1e293b] pb-2 shrink-0">
                 <div className="flex items-center gap-2">
                   <Bookmark className="w-4 h-4 text-blue-400" />
                   <h3 className="text-xs font-mono font-bold uppercase text-[#f1f5f9]">Save Current View</h3>
                 </div>
-                <button onClick={() => setIsSaveViewModalOpen(false)} className="text-[#64748b] hover:text-white">
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={saveViewModalWindow.toggleMaximize}
+                    className="p-1 text-[#64748b] hover:text-white hover:bg-[#1e293b] rounded transition"
+                    title={saveViewModalWindow.isMaximized ? "Restore window size" : "Maximize window"}
+                  >
+                    {saveViewModalWindow.isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+                  <button onClick={() => setIsSaveViewModalOpen(false)} className="text-[#64748b] hover:text-white">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -2468,6 +2561,22 @@ export default function App() {
                   Save View
                 </button>
               </div>
+
+              {/* Corner Resize Grip */}
+              {!saveViewModalWindow.isMaximized && (
+                <div
+                  onMouseDown={saveViewModalWindow.handleResizeStart}
+                  onDoubleClick={saveViewModalWindow.resetSize}
+                  className="absolute bottom-1 right-1 w-4 h-4 cursor-se-resize flex items-end justify-end p-0.5 text-[#64748b] hover:text-blue-400 active:text-blue-500 transition-colors z-20 group select-none"
+                  title="Drag corner to resize window (Double-click to reset)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" className="stroke-current fill-none stroke-2 opacity-60 group-hover:opacity-100">
+                    <line x1="8" y1="2" x2="2" y2="8" />
+                    <line x1="8" y1="5" x2="5" y2="8" />
+                    <line x1="8" y1="8" x2="8" y2="8" />
+                  </svg>
+                </div>
+              )}
             </div>
           </div>
         )}

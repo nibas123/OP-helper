@@ -29,6 +29,7 @@ import {
   Send,
   Calendar,
   Maximize2,
+  Minimize2,
   ArrowRight
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -40,6 +41,7 @@ import { AuthenticatedImage } from './AuthenticatedImage';
 import { preprocessOpenProjectMarkdown } from '../utils/markdownUtils';
 import { extractTicketIdFromUrlOrText } from '../utils/urlParser';
 import MultiSelect from './MultiSelect';
+import { useResizableWindow } from '../hooks/useResizableWindow';
 
 export interface DesktopWorkspaceProps {
   tickets: LocalTicket[];
@@ -286,6 +288,100 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   const [copiedId, setCopiedId] = useState(false);
   const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
   const [processingItemId, setProcessingItemId] = useState<string | null>(null);
+
+  // --- Resizable Sidebar Window / Rail ---
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem('op_workspace_sidebar_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 180 && parsed <= 500) return parsed;
+      }
+    }
+    return 256;
+  });
+
+  const handleSidebarResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(180, Math.min(480, startWidth + delta));
+      setSidebarWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.body.style.userSelect = prevSelect;
+      setSidebarWidth(current => {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('op_workspace_sidebar_width', String(current));
+        }
+        return current;
+      });
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // --- Resizable Ticket Detail Inspector Window / Pane ---
+  const [inspectorWidth, setInspectorWidth] = useState<number>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem('op_workspace_inspector_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 320 && parsed <= 1000) return parsed;
+      }
+    }
+    return 520;
+  });
+
+  const handleInspectorResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = inspectorWidth;
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const maxW = typeof window !== 'undefined' ? Math.max(400, window.innerWidth - 320) : 900;
+      const newWidth = Math.max(340, Math.min(maxW, startWidth + delta));
+      setInspectorWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.body.style.userSelect = prevSelect;
+      setInspectorWidth(current => {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('op_workspace_inspector_width', String(current));
+        }
+        return current;
+      });
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // --- Resizable Outbox Modal Window ---
+  const outboxModalWindow = useResizableWindow({
+    storageKey: 'op_modal_outbox_size',
+    defaultWidth: 680,
+    defaultHeight: 580,
+    minWidth: 420,
+    minHeight: 350
+  });
 
   // Quick effort state inside inspector
   const [quickEffortHours, setQuickEffortHours] = useState('1.0');
@@ -714,22 +810,35 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   );
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-none">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-text">
       {/* Mobile Drawer (Slide-Over Navigation) */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 z-50 flex md:hidden animate-in fade-in duration-200">
           <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" onClick={() => setIsMobileMenuOpen(false)} />
-          <aside className="relative w-72 max-w-[85vw] bg-[#0d1322] border-r border-[#1e293b] flex flex-col h-full shadow-2xl z-10 animate-in slide-in-from-left duration-200">
+          <aside className="relative w-72 max-w-[85vw] bg-[#0d1322] border-r border-[#1e293b] flex flex-col h-full shadow-2xl z-10 animate-in slide-in-from-left duration-200 select-text">
             {renderSidebarContent(true)}
           </aside>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 1. LEFT NAVIGATION RAIL (Desktop Sidebar) */}
+      {/* 1. LEFT NAVIGATION RAIL (Desktop Resizable Sidebar) */}
       {/* ========================================================================= */}
-      <aside className="hidden md:flex w-64 bg-[#0d1322] border-r border-[#1e293b] flex-col shrink-0 z-20">
+      <aside 
+        style={{ width: `${sidebarWidth}px` }} 
+        className="hidden md:flex bg-[#0d1322] border-r border-[#1e293b] flex-col shrink-0 z-20 relative select-text"
+      >
         {renderSidebarContent(false)}
+
+        {/* Sidebar Horizontal Resize Handle */}
+        <div
+          onMouseDown={handleSidebarResizeStart}
+          onDoubleClick={() => setSidebarWidth(256)}
+          className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-30 group flex items-center justify-center select-none"
+          title="Drag to resize sidebar width (Double-click to reset)"
+        >
+          <div className="w-[1.5px] h-8 bg-slate-600 group-hover:bg-blue-400 group-hover:h-12 transition-all rounded-full" />
+        </div>
       </aside>
 
       {/* ========================================================================= */}
@@ -1089,7 +1198,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             <tr
                               key={ticket.id}
                               onClick={() => setSelectedTicketId(ticket.id)}
-                              className={`cursor-pointer transition group select-none ${
+                              className={`cursor-pointer transition group select-text ${
                                 isSelected
                                   ? 'bg-blue-600/15 border-l-4 border-l-blue-500'
                                   : 'hover:bg-[#131b2e]'
@@ -1187,9 +1296,21 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               </div>
 
               {/* =============================================================== */}
-              {/* RIGHT: Live Work Package Detail Inspector */}
+              {/* RIGHT: Live Work Package Detail Inspector (Resizable Pane) */}
               {/* =============================================================== */}
-              <div className={`${selectedTicketId ? 'flex' : 'hidden lg:flex'} flex-1 lg:flex-none lg:w-[42%] lg:min-w-[360px] lg:max-w-[620px] bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b]`}>
+              <div 
+                style={{ width: `${inspectorWidth}px` }}
+                className={`${selectedTicketId ? 'flex' : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text max-w-[85vw]`}
+              >
+                {/* Inspector Horizontal Resize Handle */}
+                <div
+                  onMouseDown={handleInspectorResizeStart}
+                  onDoubleClick={() => setInspectorWidth(520)}
+                  className="hidden lg:flex absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/50 active:bg-blue-500 transition-colors z-30 group items-center justify-center select-none"
+                  title="Drag to resize details pane width (Double-click to reset)"
+                >
+                  <div className="w-[1.5px] h-8 bg-slate-600 group-hover:bg-blue-400 group-hover:h-12 transition-all rounded-full" />
+                </div>
                 {!selectedTicket ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-[#64748b]">
                     <div className="w-16 h-16 rounded-2xl bg-[#1e293b]/40 flex items-center justify-center mb-4 text-[#94a3b8]">
@@ -2188,13 +2309,16 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
       </div>
 
       {/* ===================================================================== */}
-      {/* PENDING SYNCS / OUTBOX MODAL */}
+      {/* PENDING SYNCS / OUTBOX MODAL (Resizable Window) */}
       {/* ===================================================================== */}
       {isOutboxModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+          <div 
+            style={outboxModalWindow.modalStyle}
+            className="bg-[#0d1322] border border-[#1e293b] rounded-2xl w-full flex flex-col shadow-2xl overflow-hidden relative select-text"
+          >
             {/* Header */}
-            <div className="p-4 sm:p-5 border-b border-[#1e293b] flex items-center justify-between bg-[#0a0f1d]">
+            <div className="p-4 sm:p-5 border-b border-[#1e293b] flex items-center justify-between bg-[#0a0f1d] shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
                   <Send className="w-5 h-5" />
@@ -2211,12 +2335,22 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setIsOutboxModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e293b] transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={outboxModalWindow.toggleMaximize}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e293b] transition"
+                  title={outboxModalWindow.isMaximized ? "Restore window size" : "Maximize window"}
+                >
+                  {outboxModalWindow.isMaximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={() => setIsOutboxModalOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1e293b] transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Actions Bar if items exist */}
@@ -2402,7 +2536,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             </div>
 
             {/* Footer */}
-            <div className="p-4 border-t border-[#1e293b] bg-[#0a0f1d] flex items-center justify-between">
+            <div className="p-4 border-t border-[#1e293b] bg-[#0a0f1d] flex items-center justify-between shrink-0">
               <span className="text-[11px] text-[#64748b]">
                 Status: {isOnline ? 'Online (Connected)' : 'Offline (Local only)'}
               </span>
@@ -2413,6 +2547,22 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 Close
               </button>
             </div>
+
+            {/* Corner Resize Grip */}
+            {!outboxModalWindow.isMaximized && (
+              <div
+                onMouseDown={outboxModalWindow.handleResizeStart}
+                onDoubleClick={outboxModalWindow.resetSize}
+                className="absolute bottom-1 right-1 w-4 h-4 cursor-se-resize flex items-end justify-end p-0.5 text-[#64748b] hover:text-blue-400 active:text-blue-500 transition-colors z-20 group select-none"
+                title="Drag corner to resize window (Double-click to reset)"
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" className="stroke-current fill-none stroke-2 opacity-60 group-hover:opacity-100">
+                  <line x1="8" y1="2" x2="2" y2="8" />
+                  <line x1="8" y1="5" x2="5" y2="8" />
+                  <line x1="8" y1="8" x2="8" y2="8" />
+                </svg>
+              </div>
+            )}
           </div>
         </div>
       )}

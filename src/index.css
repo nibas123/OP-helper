@@ -88,5 +88,18 @@
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  ::selection {
+    background-color: #2563eb !important;
+    color: #ffffff !important;
+  }
+
+  /* Allow smooth text selection and copying across descriptions, comments, and tables */
+  p, span, h1, h2, h3, h4, td, th, code, pre, label, input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
   }
 }
