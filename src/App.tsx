@@ -24,7 +24,7 @@ import {
   type SyncQueueItem,
   DEFAULT_SAVED_VIEWS 
 } from './services/db';
-import { syncService, parseDurationToHours } from './services/syncService';
+import { syncService, parseDurationToHours, is409Conflict } from './services/syncService';
 import { sheetSyncService } from './services/sheetSyncService';
 import { OpenProjectService } from './services/OpenProjectService';
 import { extractTicketIdFromUrlOrText } from './utils/urlParser';
@@ -1820,6 +1820,21 @@ export default function App() {
               showEphemeralNotice('Comment posted to OpenProject');
               await fetchTicketActivities(ticketId);
             } catch (err: any) {
+              if (is409Conflict(err)) {
+                try {
+                  console.warn(`[Comment] 409 Conflict detected for ticket #${ticketId}. Fetching latest ticket details and retrying...`);
+                  const latest = await syncService.fetchAndCacheSingleTicket(ticketId);
+                  if (latest) {
+                    await OpenProjectService.addComment(String(ticketId), comment, latest.lockVersion);
+                    showEphemeralNotice('Comment posted to OpenProject (conflict auto-resolved)');
+                    await fetchTicketActivities(ticketId);
+                    await loadLocalData();
+                    return;
+                  }
+                } catch (retryErr: any) {
+                  console.error('Failed to post comment after retry:', retryErr);
+                }
+              }
               console.error('Failed to post comment:', err);
               showEphemeralNotice('Failed to post comment');
             }

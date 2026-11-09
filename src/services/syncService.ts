@@ -54,32 +54,137 @@ export function formatDurationHours(hours?: number | null): string {
   return `${rounded}h`;
 }
 
+/**
+ * Detects whether an error from OpenProject is an HTTP 409 Conflict / Optimistic Lock error.
+ */
+export function is409Conflict(err: any): boolean {
+  if (!err) return false;
+  const status = err.response?.status || err.status || err.statusCode;
+  if (status === 409) return true;
+  const message = String(err.message || '');
+  const dataStr = err.response?.data ? (typeof err.response.data === 'string' ? err.response.data : JSON.stringify(err.response.data)) : '';
+  const combined = (message + ' ' + dataStr).toLowerCase();
+  return combined.includes('409') || combined.includes('updateconflict') || combined.includes('optimistic');
+}
+
 export const syncService = {
   /**
-   * Process a single queued sync item immediately
+   * Process a single queued sync item immediately with automatic 409 conflict resolution
    */
   async processQueueItem(item: SyncQueueItem): Promise<void> {
     if (item.type === 'UPDATE_STATUS') {
-      await OpenProjectService.updateWorkPackageStatus(
-        item.payload.ticketId,
-        item.payload.statusId,
-        item.payload.lockVersion
-      );
-      await db.removeSyncItem(item.id);
-      const t = await db.getTicket(Number(item.payload.ticketId));
-      if (t) {
-        await db.putTicket({ ...t, pendingSync: false });
+      try {
+        await OpenProjectService.updateWorkPackageStatus(
+          item.payload.ticketId,
+          item.payload.statusId,
+          item.payload.lockVersion
+        );
+        await db.removeSyncItem(item.id);
+        const t = await db.getTicket(Number(item.payload.ticketId));
+        if (t) {
+          await db.putTicket({ ...t, pendingSync: false });
+        }
+      } catch (err: any) {
+        if (is409Conflict(err)) {
+          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} status update. Fetching latest ticket details...`);
+          // 1. Fetch latest details from OpenProject
+          const latest = await this.fetchAndCacheSingleTicket(Number(item.payload.ticketId));
+          if (latest) {
+            // 2. Compare latest server status with outbox item desired status
+            if (String(latest.statusId) === String(item.payload.statusId)) {
+              console.log(`[Sync] Ticket #${item.payload.ticketId} is already in desired status (${latest.status}). Resolving conflict.`);
+              await db.removeSyncItem(item.id);
+              const t = await db.getTicket(Number(item.payload.ticketId));
+              if (t) {
+                await db.putTicket({ ...t, pendingSync: false });
+              }
+              return;
+            }
+
+            // 3. Status differs: update lockVersion from latest and push again
+            console.log(`[Sync] Conflict: Updating lockVersion from ${item.payload.lockVersion} to ${latest.lockVersion} and re-pushing status...`);
+            item.payload.lockVersion = latest.lockVersion;
+            await db.enqueueSyncItem(item);
+
+            const updated = await OpenProjectService.updateWorkPackageStatus(
+              item.payload.ticketId,
+              item.payload.statusId,
+              latest.lockVersion
+            );
+
+            await db.removeSyncItem(item.id);
+            const t = await db.getTicket(Number(item.payload.ticketId));
+            if (t) {
+              await db.putTicket({
+                ...t,
+                statusId: item.payload.statusId,
+                status: updated?._links?.status?.title || t.status,
+                lockVersion: updated?.lockVersion ?? (latest.lockVersion + 1),
+                pendingSync: false
+              });
+            }
+            return;
+          }
+        }
+        throw err;
       }
     } else if (item.type === 'UPDATE_ASSIGNEE') {
-      await OpenProjectService.updateWorkPackageAssignee(
-        item.payload.ticketId,
-        item.payload.assigneeId,
-        item.payload.lockVersion
-      );
-      await db.removeSyncItem(item.id);
-      const t = await db.getTicket(Number(item.payload.ticketId));
-      if (t) {
-        await db.putTicket({ ...t, pendingSync: false });
+      try {
+        await OpenProjectService.updateWorkPackageAssignee(
+          item.payload.ticketId,
+          item.payload.assigneeId,
+          item.payload.lockVersion
+        );
+        await db.removeSyncItem(item.id);
+        const t = await db.getTicket(Number(item.payload.ticketId));
+        if (t) {
+          await db.putTicket({ ...t, pendingSync: false });
+        }
+      } catch (err: any) {
+        if (is409Conflict(err)) {
+          console.warn(`[Sync] 409 Conflict detected for ticket #${item.payload.ticketId} assignee update. Fetching latest ticket details...`);
+          // 1. Fetch latest details from OpenProject
+          const latest = await this.fetchAndCacheSingleTicket(Number(item.payload.ticketId));
+          if (latest) {
+            // 2. Compare latest server assignee with outbox item desired assignee
+            const desiredAssigneeId = String(item.payload.assigneeId || '');
+            const currentAssigneeId = String(latest.assigneeId || '');
+            if (desiredAssigneeId === currentAssigneeId) {
+              console.log(`[Sync] Ticket #${item.payload.ticketId} is already assigned to desired assignee. Resolving conflict.`);
+              await db.removeSyncItem(item.id);
+              const t = await db.getTicket(Number(item.payload.ticketId));
+              if (t) {
+                await db.putTicket({ ...t, pendingSync: false });
+              }
+              return;
+            }
+
+            // 3. Assignee differs: update lockVersion from latest and push again
+            console.log(`[Sync] Conflict: Updating lockVersion from ${item.payload.lockVersion} to ${latest.lockVersion} and re-pushing assignee...`);
+            item.payload.lockVersion = latest.lockVersion;
+            await db.enqueueSyncItem(item);
+
+            const updated = await OpenProjectService.updateWorkPackageAssignee(
+              item.payload.ticketId,
+              item.payload.assigneeId,
+              latest.lockVersion
+            );
+
+            await db.removeSyncItem(item.id);
+            const t = await db.getTicket(Number(item.payload.ticketId));
+            if (t) {
+              await db.putTicket({
+                ...t,
+                assigneeId: item.payload.assigneeId,
+                assignee: updated?._links?.assignee?.title || t.assignee,
+                lockVersion: updated?.lockVersion ?? (latest.lockVersion + 1),
+                pendingSync: false
+              });
+            }
+            return;
+          }
+        }
+        throw err;
       }
     } else if (item.type === 'LOG_TIME') {
       await OpenProjectService.logTime(

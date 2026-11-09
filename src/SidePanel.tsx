@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Settings, CheckCircle, Clock, Search, Sun, Moon, ArrowLeft, Save, Loader2, AlertCircle, LayoutDashboard } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { OpenProjectService } from './services/OpenProjectService';
-import { parseDurationToHours, formatDurationHours } from './services/syncService';
+import { parseDurationToHours, formatDurationHours, is409Conflict } from './services/syncService';
 import { sendWebhook } from './utils/webhook';
 import { useTheme } from './hooks/useTheme';
 
@@ -54,7 +54,24 @@ export default function SidePanel() {
 
   // Mutations
   const updateStatusMutation = useMutation({
-    mutationFn: (newStatusId: string) => OpenProjectService.updateWorkPackageStatus(ticketId!, newStatusId, ticket.lockVersion),
+    mutationFn: async (newStatusId: string) => {
+      try {
+        return await OpenProjectService.updateWorkPackageStatus(ticketId!, newStatusId, ticket.lockVersion);
+      } catch (err: any) {
+        if (is409Conflict(err)) {
+          const fresh = await OpenProjectService.getWorkPackage(ticketId!);
+          if (fresh) {
+            const currentStatusHref = fresh._links?.status?.href || '';
+            const currentStatusId = currentStatusHref.split('/').pop() || '';
+            if (currentStatusId === newStatusId) {
+              return fresh;
+            }
+            return await OpenProjectService.updateWorkPackageStatus(ticketId!, newStatusId, fresh.lockVersion);
+          }
+        }
+        throw err;
+      }
+    },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['ticket', ticketId] });
       const statusName = statusesData?._embedded?.elements.find((s: any) => String(s.id) === variables)?.name;
@@ -69,7 +86,24 @@ export default function SidePanel() {
   });
 
   const updateAssigneeMutation = useMutation({
-    mutationFn: (newAssigneeId: string) => OpenProjectService.updateWorkPackageAssignee(ticketId!, newAssigneeId, ticket.lockVersion),
+    mutationFn: async (newAssigneeId: string) => {
+      try {
+        return await OpenProjectService.updateWorkPackageAssignee(ticketId!, newAssigneeId, ticket.lockVersion);
+      } catch (err: any) {
+        if (is409Conflict(err)) {
+          const fresh = await OpenProjectService.getWorkPackage(ticketId!);
+          if (fresh) {
+            const currentAssigneeHref = fresh._links?.assignee?.href || '';
+            const currentAssigneeId = currentAssigneeHref.split('/').pop() || '';
+            if (currentAssigneeId === newAssigneeId) {
+              return fresh;
+            }
+            return await OpenProjectService.updateWorkPackageAssignee(ticketId!, newAssigneeId, fresh.lockVersion);
+          }
+        }
+        throw err;
+      }
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ticket', ticketId] }),
   });
 
