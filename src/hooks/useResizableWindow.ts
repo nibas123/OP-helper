@@ -130,13 +130,18 @@ export function useResizableWindow({
     setIsMaximized(false);
   }, [defaultWidth, defaultHeight, saveSize]);
 
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+
   return {
     size,
     isMaximized,
+    isMobile,
     toggleMaximize,
     handleResizeStart,
     resetSize,
-    modalStyle: isMaximized
+    modalStyle: isMobile
+      ? { width: 'calc(100vw - 20px)', height: 'auto', maxWidth: 'calc(100vw - 20px)', maxHeight: '90dvh' }
+      : isMaximized
       ? { width: '96vw', height: '94vh', maxWidth: '96vw', maxHeight: '94vh' }
       : { width: `${size.width}px`, height: `${size.height}px`, maxWidth: '96vw', maxHeight: '94vh' },
   };

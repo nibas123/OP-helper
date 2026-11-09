@@ -289,6 +289,15 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
   const [processingItemId, setProcessingItemId] = useState<string | null>(null);
 
+  // Responsive breakpoint tracker for mobile vs desktop
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 1024 : true);
+
+  useEffect(() => {
+    const handleResize = () => setIsDesktop(window.innerWidth >= 1024);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // --- Resizable Sidebar Window / Rail ---
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -810,7 +819,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   );
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-text">
+    <div className="flex h-[100dvh] w-screen overflow-hidden bg-[#090d16] text-[#f1f5f9] font-sans select-text relative">
       {/* Mobile Drawer (Slide-Over Navigation) */}
       {isMobileMenuOpen && (
         <div className="fixed inset-0 z-50 flex md:hidden animate-in fade-in duration-200">
@@ -844,17 +853,83 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
       {/* ========================================================================= */}
       {/* 2. MAIN WEBSITE AREA (Header + Content) */}
       {/* ========================================================================= */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-        {/* Top App Bar */}
-        <header className="h-14 bg-[#0d1322] border-b border-[#1e293b] px-4 md:px-6 flex items-center justify-between shrink-0 gap-3 z-10">
-          {/* Hamburger button on Mobile */}
-          <button
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="md:hidden p-2 rounded-xl border border-[#1e293b] bg-[#090d16] text-slate-300 hover:text-white transition shrink-0"
-            title="Open navigation menu"
-          >
-            <Menu className="w-4 h-4" />
-          </button>
+      <div className="flex-1 flex flex-col min-w-0 h-[100dvh] overflow-hidden pb-14 md:pb-0">
+        {/* Mobile Top App Bar (md:hidden) */}
+        <header className="md:hidden bg-[#0d1322] border-b border-[#1e293b] flex flex-col shrink-0 z-10">
+          <div className="h-12 px-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsMobileMenuOpen(true)}
+                className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-slate-300 hover:text-white transition shrink-0"
+                title="Open navigation menu"
+              >
+                <Menu className="w-4 h-4" />
+              </button>
+              <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-white">
+                <FolderKanban className="w-4 h-4 text-blue-400" />
+                <span>OP Helper</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setIsAddEffortModalOpen(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-mono font-bold"
+                title="Log time effort"
+              >
+                <Timer className="w-3.5 h-3.5" />
+                <span>{todayTotalHours.toFixed(1)}h</span>
+              </button>
+
+              <button
+                onClick={() => setIsOutboxModalOpen(true)}
+                className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-slate-300 relative"
+                title="Outbox"
+              >
+                <Send className="w-3.5 h-3.5 text-amber-400" />
+                {pendingCount > 0 && (
+                  <span className="absolute -top-1 -right-1 px-1 rounded-full bg-amber-500 text-[9px] font-bold text-black">
+                    {pendingCount}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => handleSync(true)}
+                disabled={isSyncing}
+                className="p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-slate-300"
+                title="Sync now"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-blue-400' : 'text-slate-400'}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Search bar row on mobile */}
+          <div className="px-3 pb-2.5">
+            <div className="relative flex items-center">
+              <Search className="w-4 h-4 text-[#64748b] absolute left-3 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search by #ID, subject, project..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-[#090d16] border border-[#1e293b] rounded-xl pl-9 pr-8 py-1.5 text-xs text-slate-200 placeholder-[#64748b] focus:border-blue-500 focus:outline-none transition shadow-inner font-sans"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 p-0.5 text-[#64748b] hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* Desktop Top App Bar (hidden md:flex) */}
+        <header className="hidden md:flex h-14 bg-[#0d1322] border-b border-[#1e293b] px-6 items-center justify-between shrink-0 gap-3 z-10">
           {/* Global Search with Debounce & Remote Fallback */}
           <div className="flex-1 max-w-xl relative flex items-center">
             <Search className="w-4 h-4 text-[#64748b] absolute left-3 pointer-events-none" />
@@ -998,37 +1073,37 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
         {/* ===================================================================== */}
         {activeTab === 'tickets' && (
           <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Top Bento KPI Summary Cards (Requirement 1: Removed Work Packages, Starred Daily, Urgent/High) */}
-            <div className="px-6 py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-1 sm:grid-cols-3 gap-3 shrink-0">
-              <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-emerald-500/30 transition">
-                <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today's Effort</span>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-emerald-400 font-mono">{todayTotalHours.toFixed(1)}h</span>
-                  <span className="text-[11px] text-[#64748b]">/ 8.0h</span>
+            {/* Top Bento KPI Summary Cards */}
+            <div className="px-3 sm:px-6 py-2 sm:py-3.5 bg-[#0a0f1d] border-b border-[#1e293b] grid grid-cols-3 gap-2 sm:gap-3 shrink-0">
+              <div className="bg-[#0f172a] p-2 sm:p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-emerald-500/30 transition text-center sm:text-left">
+                <span className="text-[10px] sm:text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today</span>
+                <div className="flex items-baseline justify-center sm:justify-start gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                  <span className="text-base sm:text-xl font-bold text-emerald-400 font-mono">{todayTotalHours.toFixed(1)}h</span>
+                  <span className="text-[10px] sm:text-[11px] text-[#64748b] hidden sm:inline">/ 8.0h</span>
                 </div>
               </div>
 
-              <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-blue-500/30 transition">
-                <span className="text-[11px] font-mono text-blue-400 uppercase tracking-wide">Week Total</span>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-blue-400 font-mono">{weeklyTotalHours.toFixed(1)}h</span>
-                  <span className="text-[11px] text-[#64748b]">/ 40.0h</span>
+              <div className="bg-[#0f172a] p-2 sm:p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-blue-500/30 transition text-center sm:text-left">
+                <span className="text-[10px] sm:text-[11px] font-mono text-blue-400 uppercase tracking-wide">Week</span>
+                <div className="flex items-baseline justify-center sm:justify-start gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                  <span className="text-base sm:text-xl font-bold text-blue-400 font-mono">{weeklyTotalHours.toFixed(1)}h</span>
+                  <span className="text-[10px] sm:text-[11px] text-[#64748b] hidden sm:inline">/ 40.0h</span>
                 </div>
               </div>
 
-              <div className="bg-[#0f172a] p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-purple-500/30 transition">
-                <span className="text-[11px] font-mono text-purple-400 uppercase tracking-wide">Month Total</span>
-                <div className="flex items-baseline gap-2 mt-1">
-                  <span className="text-xl font-bold text-purple-400 font-mono">{monthTotalHours.toFixed(1)}h</span>
-                  <span className="text-[11px] text-[#64748b]">/ 160h</span>
+              <div className="bg-[#0f172a] p-2 sm:p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-purple-500/30 transition text-center sm:text-left">
+                <span className="text-[10px] sm:text-[11px] font-mono text-purple-400 uppercase tracking-wide">Month</span>
+                <div className="flex items-baseline justify-center sm:justify-start gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                  <span className="text-base sm:text-xl font-bold text-purple-400 font-mono">{monthTotalHours.toFixed(1)}h</span>
+                  <span className="text-[10px] sm:text-[11px] text-[#64748b] hidden sm:inline">/ 160h</span>
                 </div>
               </div>
             </div>
 
             {/* Filter & Sorting Toolbar */}
-            <div className="px-6 py-2.5 bg-[#0d1322] border-b border-[#1e293b] flex flex-wrap items-center justify-between gap-3 shrink-0">
+            <div className="px-3 sm:px-6 py-2 bg-[#0d1322] border-b border-[#1e293b] flex flex-wrap items-center justify-between gap-2 shrink-0">
               {/* Left filter pill group */}
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar w-full sm:w-auto pb-1 sm:pb-0">
                 {/* Category toggle */}
                 <div className="flex items-center bg-[#090d16] border border-[#1e293b] rounded-lg p-0.5 text-xs">
                   <button
@@ -1159,7 +1234,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               {/* =============================================================== */}
               <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicketId ? 'hidden lg:flex' : 'flex'}`}>
                 <div className="flex-1 overflow-auto">
-                  <table className="w-full text-left border-collapse">
+                  <table className="hidden md:table w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-[#0d1322] z-10 border-b border-[#1e293b] text-[11px] font-mono text-[#64748b] uppercase tracking-wider">
                       <tr>
                         <th className="py-2.5 px-3 w-10 text-center">⭐</th>
@@ -1286,21 +1361,113 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                       )}
                     </tbody>
                   </table>
+
+                  {/* Mobile Card List (md:hidden) */}
+                  <div className="md:hidden divide-y divide-[#1e293b]">
+                    {filteredTickets.length === 0 ? (
+                      <div className="p-8 text-center text-[#64748b]">
+                        <div className="w-12 h-12 rounded-xl bg-[#1e293b]/40 flex items-center justify-center mx-auto mb-3 text-[#94a3b8]">
+                          <Search className="w-6 h-6" />
+                        </div>
+                        <p className="text-sm font-semibold text-slate-300">No work packages found</p>
+                        <p className="text-xs text-[#64748b] mt-1">Try clearing filters or search terms</p>
+                      </div>
+                    ) : (
+                      filteredTickets.map((ticket) => {
+                        const isSelected = ticket.id === selectedTicketId;
+                        const isUrgent = ticket.priority?.toLowerCase() === 'high' || ticket.priority?.toLowerCase() === 'urgent';
+                        const spentNum = parseFloat(ticket.spentTime || '0') || 0;
+                        return (
+                          <div
+                            key={ticket.id}
+                            onClick={() => setSelectedTicketId(ticket.id)}
+                            className={`p-3.5 flex flex-col gap-2 transition cursor-pointer active:bg-blue-600/10 ${
+                              isSelected ? 'bg-blue-600/15 border-l-4 border-blue-500' : 'hover:bg-[#0f172a]'
+                            }`}
+                          >
+                            {/* Top row: Star, ID, Type, Status, Spent, Open OP */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleToggleStar(e, ticket.id)}
+                                  className="p-1 -m-1 text-[#64748b] hover:text-amber-400 transition"
+                                  title={ticket.starred ? "Starred task (Click to unstar)" : "Star task"}
+                                >
+                                  <Star
+                                    className={`w-4 h-4 ${
+                                      ticket.starred ? 'text-amber-400 fill-amber-400' : 'opacity-40 hover:opacity-100'
+                                    }`}
+                                  />
+                                </button>
+                                <span className="font-mono text-xs font-bold text-blue-400">#{ticket.id}</span>
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#1e293b] text-[#94a3b8] truncate max-w-[80px]">
+                                  {ticket.type}
+                                </span>
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 truncate max-w-[90px]">
+                                  {ticket.status}
+                                </span>
+                                {isUrgent && (
+                                  <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold">
+                                    🔥
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                {spentNum > 0 && (
+                                  <span className="font-mono text-xs font-bold text-emerald-400">
+                                    {spentNum.toFixed(1)}h
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openInFullScreenAndClose(`${opUrl.replace(/\/+$/, '')}/work_packages/${ticket.id}`);
+                                  }}
+                                  className="p-1 text-[#64748b] hover:text-white"
+                                  title="Open in OpenProject"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Subject */}
+                            <p className="text-xs font-semibold text-slate-100 leading-snug line-clamp-2">
+                              {ticket.subject}
+                            </p>
+
+                            {/* Bottom row: Project & Assignee */}
+                            <div className="flex items-center justify-between text-[11px] text-[#64748b] pt-0.5">
+                              <span className="truncate max-w-[60%] font-mono text-slate-400">
+                                {ticket.project || 'No Project'}
+                              </span>
+                              <span className="truncate max-w-[38%] text-slate-400 text-right">
+                                {ticket.assignee || 'Unassigned'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
 
                 {/* Table Footer Summary */}
-                <div className="h-9 px-6 bg-[#0d1322] border-t border-[#1e293b] flex items-center justify-between text-xs text-[#64748b] font-mono shrink-0">
+                <div className="h-9 px-4 sm:px-6 bg-[#0d1322] border-t border-[#1e293b] flex items-center justify-between text-xs text-[#64748b] font-mono shrink-0">
                   <span>Showing {filteredTickets.length} of {tickets.length} work packages</span>
-                  <span>Click any row to view & edit details</span>
+                  <span className="hidden sm:inline">Click any row to view & edit details</span>
                 </div>
               </div>
 
               {/* =============================================================== */}
-              {/* RIGHT: Live Work Package Detail Inspector (Resizable Pane) */}
+              {/* RIGHT: Live Work Package Detail Inspector (Responsive / Resizable Pane) */}
               {/* =============================================================== */}
               <div 
-                style={{ width: `${inspectorWidth}px` }}
-                className={`${selectedTicketId ? 'flex' : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text max-w-[85vw]`}
+                style={isDesktop ? { width: `${inspectorWidth}px` } : undefined}
+                className={`${selectedTicketId ? 'flex fixed inset-0 z-40 md:static md:z-auto' : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text ${isDesktop ? 'max-w-[85vw]' : 'w-full'}`}
               >
                 {/* Inspector Horizontal Resize Handle */}
                 <div
@@ -1316,9 +1483,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     <div className="w-16 h-16 rounded-2xl bg-[#1e293b]/40 flex items-center justify-center mb-4 text-[#94a3b8]">
                       <FileText className="w-8 h-8" />
                     </div>
-                    <h3 className="text-sm font-semibold text-slate-300 mb-1">No Work Package Selected</h3>
+                    <h3 className="text-sm font-semibold text-slate-300 mb-1">
+                      {selectedTicketId ? `Loading Ticket #${selectedTicketId}...` : 'No Work Package Selected'}
+                    </h3>
                     <p className="text-xs max-w-xs text-[#64748b]">
-                      Click any row from the work package table on the left to preview details, log effort, and edit comments.
+                      {selectedTicketId 
+                        ? 'Fetching ticket details from OpenProject...'
+                        : 'Select any work package to preview details, log effort, and edit comments.'
+                      }
                     </p>
                   </div>
                 ) : (
@@ -1330,10 +1502,11 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                           {/* Back button for Mobile */}
                           <button
                             onClick={() => setSelectedTicketId(null)}
-                            className="lg:hidden p-1.5 -ml-1 text-slate-400 hover:text-white hover:bg-[#1e293b] rounded-lg transition"
+                            className="lg:hidden flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-lg transition mr-1"
                             title="Back to Work Packages"
                           >
                             <ChevronLeft className="w-4 h-4" />
+                            <span>Back</span>
                           </button>
                           <span className="font-mono text-xs font-bold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-lg border border-blue-500/20">
                             #{selectedTicket.id}
@@ -1530,7 +1703,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                                   ),
                                   a: ({ href, children }) => {
                                     if (!href) return <span>{children}</span>;
-                                    const match = href.match(/work[_]?packages\/(\d+)/i);
+                                    const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
                                     if (match) {
                                       const targetId = parseInt(match[1], 10);
                                       return (
@@ -1777,7 +1950,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                                           components={{
                                             a: ({ href, children }) => {
                                               if (!href) return <span>{children}</span>;
-                                              const match = href.match(/work[_]?packages\/(\d+)/i);
+                                              const match = href.match(/work[\\_]+packages\/(\d+)/i) || href.match(/work_packages\/(\d+)/i);
                                               if (match) {
                                                 const targetId = parseInt(match[1], 10);
                                                 return (
@@ -2566,6 +2739,82 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
           </div>
         </div>
       )}
+
+      {/* Mobile Bottom Navigation Bar (md:hidden) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-[#0a0f1d] border-t border-[#1e293b] px-3 flex items-center justify-around z-30 shadow-2xl backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('tickets');
+            setSelectedTicketId(null);
+          }}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition relative ${
+            activeTab === 'tickets' && !selectedTicketId ? 'text-blue-400 font-semibold' : 'text-[#64748b] hover:text-slate-300'
+          }`}
+        >
+          <FolderKanban className="w-4 h-4" />
+          <span className="text-[10px] font-mono">Tickets</span>
+          {tickets.length > 0 && (
+            <span className="absolute -top-1 -right-1 px-1 rounded-full bg-blue-600/30 text-blue-300 text-[8px] font-mono font-bold">
+              {tickets.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('efforts');
+            setSelectedTicketId(null);
+          }}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition ${
+            activeTab === 'efforts' ? 'text-blue-400 font-semibold' : 'text-[#64748b] hover:text-slate-300'
+          }`}
+        >
+          <Clock className="w-4 h-4" />
+          <span className="text-[10px] font-mono">Efforts</span>
+        </button>
+
+        {/* Center action: Quick Log Effort */}
+        <button
+          type="button"
+          onClick={() => setIsAddEffortModalOpen(true)}
+          className="flex items-center justify-center w-10 h-10 -mt-3 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/40 border-2 border-[#0a0f1d] active:scale-95 transition"
+          title="Log Time Effort"
+        >
+          <Plus className="w-5 h-5 stroke-[2.5]" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setIsOutboxModalOpen(true)}
+          className="flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition relative text-[#64748b] hover:text-slate-300"
+          title="Outbox & Pending Syncs"
+        >
+          <Send className="w-4 h-4" />
+          <span className="text-[10px] font-mono">Outbox</span>
+          {syncQueue.length > 0 && (
+            <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full bg-amber-500 text-black text-[9px] font-mono font-bold animate-pulse">
+              {syncQueue.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('sheet');
+            setSelectedTicketId(null);
+          }}
+          className={`flex flex-col items-center justify-center gap-0.5 py-1 px-2 rounded-lg transition ${
+            activeTab === 'sheet' ? 'text-blue-400 font-semibold' : 'text-[#64748b] hover:text-slate-300'
+          }`}
+          title="Google Sheets Database"
+        >
+          <Database className="w-4 h-4" />
+          <span className="text-[10px] font-mono">Sheets</span>
+        </button>
+      </nav>
     </div>
   );
 }

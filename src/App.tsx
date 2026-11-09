@@ -168,7 +168,6 @@ export default function App() {
   const [isAddEffortModalOpen, setIsAddEffortModalOpen] = useState(false);
   const [effortTicketSearch, setEffortTicketSearch] = useState('');
   const [effortSelectedTicket, setEffortSelectedTicket] = useState<LocalTicket | null>(null);
-  const [effortRemoteSearchResults, setEffortRemoteSearchResults] = useState<LocalTicket[]>([]);
   const [effortModalHours, setEffortModalHours] = useState('1.0');
   const [effortModalDate, setEffortModalDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [effortModalComment, setEffortModalComment] = useState('');
@@ -576,58 +575,42 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // --- Auto-fetch and Auto-search for Log Effort modal ---
+  // --- Auto-fetch single ticket if exact ID entered for Log Effort modal ---
   useEffect(() => {
     if (!isAddEffortModalOpen || effortSelectedTicket) return;
     const raw = effortTicketSearch.trim();
-    if (!raw) {
-      setEffortRemoteSearchResults([]);
-      return;
-    }
+    if (!raw) return;
 
     const extractedId = extractTicketIdFromUrlOrText(raw) || parseInt(raw.replace(/^#/, ''), 10);
-    const hasValidTargetId = !isNaN(extractedId) && extractedId > 0;
+    const hasValidTargetId = !isNaN(extractedId) && extractedId > 0 && /^\d+$/.test(raw.replace(/^#/, ''));
 
-    // If ID, try local first
+    // If exact ID entered, try local tickets first
     if (hasValidTargetId) {
       const local = tickets.find(t => t.id === extractedId && t.subject && !t.subject.startsWith('Ticket #'));
       if (local) {
         setEffortSelectedTicket(local);
         return;
       }
-    }
 
-    if (!hasValidTargetId && raw.length < 2) {
-      setEffortRemoteSearchResults([]);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setIsFetchingEffortTicket(true);
-      setEffortTicketFetchError(null);
-      try {
-        if (hasValidTargetId) {
+      // If not found locally, fetch single ticket from server
+      const timer = setTimeout(async () => {
+        setIsFetchingEffortTicket(true);
+        setEffortTicketFetchError(null);
+        try {
           const single = await syncService.fetchAndCacheSingleTicket(extractedId);
           if (single) {
             setEffortSelectedTicket(single);
             setEffortTicketSearch('');
-            setEffortRemoteSearchResults([]);
-            return;
           }
+        } catch (err: any) {
+          console.warn('Auto fetch ticket for effort error:', err);
+        } finally {
+          setIsFetchingEffortTicket(false);
         }
-        const results = await syncService.searchRemoteAndCache(raw);
-        setEffortRemoteSearchResults(results);
-        if (results.length === 0) {
-          setEffortTicketFetchError(`No tickets matching "${raw}" found on OpenProject.`);
-        }
-      } catch (err: any) {
-        console.warn('Auto search effort error:', err);
-      } finally {
-        setIsFetchingEffortTicket(false);
-      }
-    }, 350);
+      }, 500);
 
-    return () => clearTimeout(timer);
+      return () => clearTimeout(timer);
+    }
   }, [effortTicketSearch, isAddEffortModalOpen, effortSelectedTicket, tickets]);
 
   // --- Toggle Star (Daily Task) ---
@@ -721,36 +704,6 @@ export default function App() {
       }
     } catch (err: any) {
       setEffortTicketFetchError(err.message || `Failed to fetch ticket #${targetId}`);
-    } finally {
-      setIsFetchingEffortTicket(false);
-    }
-  };
-
-  const handleRemoteSearchForEffort = async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    setIsFetchingEffortTicket(true);
-    setEffortTicketFetchError(null);
-    try {
-      const results = await syncService.searchRemoteAndCache(trimmed);
-      setEffortRemoteSearchResults(results);
-      if (results.length > 0) {
-        setTickets(prev => {
-          const map = new Map<number, LocalTicket>();
-          results.forEach(r => map.set(r.id, r));
-          prev.forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
-          return Array.from(map.values());
-        });
-        if (results.length === 1) {
-          setEffortSelectedTicket(results[0]);
-          setEffortTicketSearch('');
-          setEffortRemoteSearchResults([]);
-        }
-      } else {
-        setEffortTicketFetchError(`No tickets matching "${trimmed}" found on OpenProject.`);
-      }
-    } catch (err: any) {
-      setEffortTicketFetchError(err.message || `Failed searching OpenProject for "${trimmed}"`);
     } finally {
       setIsFetchingEffortTicket(false);
     }
@@ -1345,54 +1298,26 @@ export default function App() {
     };
   }, [selectedTicketId, currentUser]);
 
-  // Search filter for Add Effort Ticket Picker
+  // Search filter for Add Effort Ticket Picker - ONLY STARRED TICKETS
   const effortTicketSearchResults = useMemo(() => {
+    const starredOnly = tickets.filter(t => !!t.starred);
     const raw = effortTicketSearch.trim();
     if (!raw) {
-      // Under Log Time and Effort, the list of tracked tickets should be displayed
-      const trackedIds = Array.from(new Set(allEfforts.map(e => e.workPackageId)));
-      const trackedTickets = trackedIds.map(id => {
-        const found = tickets.find(t => t.id === id);
-        if (found) return found;
-        const eff = allEfforts.find(e => e.workPackageId === id);
-        return {
-          id,
-          subject: eff?.ticketSubject || `Ticket #${id}`,
-          project: 'Tracked Work Package',
-          status: 'Tracked',
-          priority: 'Normal',
-          assignee: 'You',
-          spentTime: '',
-          estimatedTime: '',
-          lockVersion: 1,
-          updatedAt: new Date().toISOString(),
-          pendingSync: false
-        } as LocalTicket;
-      });
-      return trackedTickets.length > 0 ? trackedTickets : tickets.slice(0, 15);
+      return starredOnly;
     }
 
-    const extractedId = extractTicketIdFromUrlOrText(raw);
+    const extractedId = extractTicketIdFromUrlOrText(raw) || parseInt(raw.replace(/^#/, ''), 10);
     const cleanId = raw.replace(/^#/, '').toLowerCase();
     const q = raw.toLowerCase();
 
-    // 1. Local matching tickets
-    const localMatches = tickets.filter(t => 
+    // Filter strictly within the user's starred tickets
+    return starredOnly.filter(t => 
       (extractedId && t.id === extractedId) ||
       String(t.id).includes(cleanId) ||
       t.subject.toLowerCase().includes(q) ||
-      t.project.toLowerCase().includes(q)
+      (t.project && t.project.toLowerCase().includes(q))
     );
-
-    // 2. Combine with remote search results from OpenProject
-    const map = new Map<number, LocalTicket>();
-    localMatches.forEach(t => map.set(t.id, t));
-    effortRemoteSearchResults.forEach(t => {
-      if (!map.has(t.id)) map.set(t.id, t);
-    });
-
-    return Array.from(map.values()).slice(0, 20);
-  }, [tickets, allEfforts, effortTicketSearch, effortRemoteSearchResults]);
+  }, [tickets, effortTicketSearch]);
 
   // --- Saved Views Activation & Application ---
   const applySavedView = (view: SavedView) => {
@@ -2006,15 +1931,11 @@ export default function App() {
                                 setEffortTicketFetchError(null);
                               }}
                               onKeyDown={e => {
-                                if (e.key === 'Enter') {
-                                  if (hasValidTargetId) {
-                                    fetchTicketForEffort(effortTargetId);
-                                  } else if (effortTicketSearch.trim()) {
-                                    handleRemoteSearchForEffort(effortTicketSearch.trim());
-                                  }
+                                if (e.key === 'Enter' && hasValidTargetId) {
+                                  fetchTicketForEffort(effortTargetId);
                                 }
                               }}
-                              placeholder="Enter ticket #ID, URL, or search title..."
+                              placeholder="Search starred tickets by title or enter #ID..."
                               className="w-full bg-[#090d16] text-xs text-[#f1f5f9] rounded-xl pl-9 pr-8 py-2 border border-[#1e293b] focus:outline-none focus:border-blue-500 placeholder:text-[#64748b]"
                             />
                             {effortTicketSearch && (
@@ -2031,7 +1952,7 @@ export default function App() {
                             )}
                           </div>
 
-                          {hasValidTargetId ? (
+                          {hasValidTargetId && (
                             <div className="flex items-center gap-1.5 shrink-0">
                               <button
                                 type="button"
@@ -2060,16 +1981,7 @@ export default function App() {
                                 <span>Open in OP</span>
                               </button>
                             </div>
-                          ) : effortTicketSearch.trim().length >= 2 ? (
-                            <button
-                              type="button"
-                              disabled={isFetchingEffortTicket}
-                              onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
-                              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-xl text-xs font-mono font-medium shrink-0 flex items-center gap-1.5 transition"
-                            >
-                              {isFetchingEffortTicket ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Search Server'}
-                            </button>
-                          ) : null}
+                          )}
                         </div>
 
                         {isFetchingEffortTicket && (
@@ -2102,12 +2014,13 @@ export default function App() {
                             </div>
                           )}
 
-                          {!effortTicketSearch && (
-                            <div className="px-3 py-1.5 bg-[#0d1322] border-b border-[#1e293b] text-[10px] font-mono text-[#64748b] uppercase tracking-wider flex items-center justify-between">
-                              <span>Tracked Work Packages</span>
-                              <span className="text-emerald-400 font-bold">{effortTicketSearchResults.length} available</span>
-                            </div>
-                          )}
+                          <div className="px-3 py-1.5 bg-[#0d1322] border-b border-[#1e293b] text-[10px] font-mono text-[#64748b] uppercase tracking-wider flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 text-amber-400">
+                              <Star className="w-3 h-3 fill-current" />
+                              <span>Starred Work Packages</span>
+                            </span>
+                            <span className="text-amber-400 font-bold">{effortTicketSearchResults.length} starred</span>
+                          </div>
 
                           {effortTicketSearchResults.map(t => {
                             const hoursLoggedOnTicket = allEfforts
@@ -2119,9 +2032,10 @@ export default function App() {
                                 onClick={() => setEffortSelectedTicket(t)}
                                 className="p-2.5 hover:bg-[#1e293b] cursor-pointer transition text-xs flex items-center justify-between group"
                               >
-                                <div className="truncate pr-2">
-                                  <span className="font-mono font-bold text-blue-400 mr-1.5">#{t.id}</span>
-                                  <span className="text-slate-300 font-medium">{t.subject}</span>
+                                <div className="truncate pr-2 flex items-center gap-1.5">
+                                  <Star className="w-3.5 h-3.5 text-amber-400 fill-current shrink-0" />
+                                  <span className="font-mono font-bold text-blue-400 mr-1 shrink-0">#{t.id}</span>
+                                  <span className="text-slate-300 font-medium truncate">{t.subject}</span>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                   {hoursLoggedOnTicket > 0 && (
@@ -2155,10 +2069,20 @@ export default function App() {
                             );
                           })}
 
-                          {effortTicketSearchResults.length === 0 && !isFetchingEffortTicket && effortTicketSearch && (
+                          {effortTicketSearchResults.length === 0 && !effortTicketSearch && (
+                            <div className="p-5 text-center text-xs text-[#64748b] space-y-1.5">
+                              <Star className="w-6 h-6 mx-auto text-amber-400/60" />
+                              <p className="text-slate-300 font-medium">No Starred Work Packages</p>
+                              <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+                                Click the ⭐ star icon next to any ticket in your work packages list to add it here for fast daily time logging.
+                              </p>
+                            </div>
+                          )}
+
+                          {effortTicketSearchResults.length === 0 && effortTicketSearch && (
                             <div className="p-4 text-center text-xs text-[#64748b] space-y-2">
-                              <div>No tickets found matching "{effortTicketSearch}".</div>
-                              {hasValidTargetId ? (
+                              <div>No starred tickets found matching "{effortTicketSearch}".</div>
+                              {hasValidTargetId && (
                                 <button
                                   type="button"
                                   disabled={isFetchingEffortTicket}
@@ -2166,17 +2090,7 @@ export default function App() {
                                   className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
                                 >
                                   <Search className="w-3.5 h-3.5" />
-                                  Query Ticket #{effortTargetId} from OpenProject
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={isFetchingEffortTicket}
-                                  onClick={() => handleRemoteSearchForEffort(effortTicketSearch.trim())}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg font-mono text-xs font-medium transition"
-                                >
-                                  <Search className="w-3.5 h-3.5" />
-                                  Search OpenProject for "{effortTicketSearch.trim()}"
+                                  Fetch Ticket #{effortTargetId} from OpenProject
                                 </button>
                               )}
                             </div>
