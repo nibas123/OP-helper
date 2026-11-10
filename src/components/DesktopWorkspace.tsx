@@ -301,6 +301,17 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     }
   });
 
+  // Effective full view: ONLY active when an actual ticket is open
+  const isEffectiveFullView = Boolean(isInspectorFullView && selectedTicket);
+
+  // Automatically reset full view if no ticket is selected (prevents empty full screen trap)
+  useEffect(() => {
+    if (!selectedTicketId && isInspectorFullView) {
+      setIsInspectorFullView(false);
+      try { localStorage.setItem('op_inspector_full_view', 'false'); } catch (e) {}
+    }
+  }, [selectedTicketId, isInspectorFullView]);
+
   const toggleInspectorFullView = () => {
     setIsInspectorFullView(prev => {
       const next = !prev;
@@ -337,6 +348,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
       setSelectedTicketId(prevTicketId);
     } else {
       setSelectedTicketId(null);
+      setIsInspectorFullView(false);
+      try { localStorage.setItem('op_inspector_full_view', 'false'); } catch (e) {}
     }
   };
 
@@ -344,6 +357,8 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
   const handleCloseInspector = () => {
     setTicketHistory([]);
     setSelectedTicketId(null);
+    setIsInspectorFullView(false);
+    try { localStorage.setItem('op_inspector_full_view', 'false'); } catch (e) {}
   };
   const [copiedId, setCopiedId] = useState(false);
   const [isOutboxModalOpen, setIsOutboxModalOpen] = useState(false);
@@ -1791,7 +1806,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               {/* =============================================================== */}
               {/* LEFT: High-Density Work Package Table (100% on mobile, 58% on desktop) */}
               {/* =============================================================== */}
-              <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicketId ? (isInspectorFullView ? 'hidden' : 'hidden lg:flex') : 'flex'}`}>
+              <div className={`flex-1 flex flex-col border-r border-[#1e293b] min-w-0 bg-[#090d16] ${selectedTicket ? (isEffectiveFullView ? 'hidden' : 'hidden lg:flex') : 'flex'}`}>
                 <div className="flex-1 overflow-auto">
                   <table className="hidden md:table w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-[#0d1322] z-10 border-b border-[#1e293b] text-[11px] font-mono text-[#64748b] uppercase tracking-wider">
@@ -2025,11 +2040,11 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               {/* RIGHT: Live Work Package Detail Inspector (Responsive / Resizable Pane) */}
               {/* =============================================================== */}
               <div 
-                style={isDesktop && !isInspectorFullView ? { width: `${inspectorWidth}px` } : undefined}
-                className={`${selectedTicketId ? (isDesktop ? 'flex h-full' : 'flex fixed inset-0 z-50 bg-[#090d16] h-[100dvh] w-full') : 'hidden lg:flex'} flex-1 lg:flex-none bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text ${isDesktop && !isInspectorFullView ? 'max-w-[85vw]' : 'w-full'}`}
+                style={isDesktop && !isEffectiveFullView ? { width: `${inspectorWidth}px` } : undefined}
+                className={`${selectedTicket ? (isDesktop ? (isEffectiveFullView ? 'flex-1 w-full' : 'flex-none') : 'flex fixed inset-0 z-50 bg-[#090d16] h-[100dvh] w-full') : 'hidden lg:flex flex-none'} bg-[#0c1220] flex-col h-full overflow-hidden border-l border-[#1e293b] relative select-text ${isDesktop && !isEffectiveFullView ? 'max-w-[85vw]' : 'w-full'}`}
               >
                 {/* Inspector Horizontal Resize Handle (Desktop side-by-side mode only) */}
-                {isDesktop && !isInspectorFullView && (
+                {isDesktop && !isEffectiveFullView && selectedTicket && (
                   <div
                     onMouseDown={handleInspectorResizeStart}
                     onDoubleClick={() => setInspectorWidth(520)}
@@ -2050,9 +2065,24 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     <p className="text-xs max-w-xs text-[#64748b]">
                       {selectedTicketId 
                         ? 'Fetching ticket details from OpenProject...'
-                        : 'Select any work package to preview details, log effort, and edit comments.'
+                        : 'Select any work package from the table to preview details, log effort, and edit comments.'
                       }
                     </p>
+                    {(isInspectorFullView || !isDesktop) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsInspectorFullView(false);
+                          setSelectedTicketId(null);
+                          setTicketHistory([]);
+                          try { localStorage.setItem('op_inspector_full_view', 'false'); } catch (e) {}
+                        }}
+                        className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold flex items-center gap-2 transition shadow-lg shadow-blue-600/20"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span>Back to Work Packages Table</span>
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
@@ -2065,10 +2095,10 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             type="button"
                             onClick={handleBackNavigation}
                             className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 active:bg-blue-500/30 border border-blue-500/30 rounded-lg transition"
-                            title={ticketHistory.length > 0 ? `Back to #${ticketHistory[ticketHistory.length - 1]}` : (isDesktop ? "Back to Table" : "Back to Work Packages")}
+                            title={ticketHistory.length > 0 ? `Back to #${ticketHistory[ticketHistory.length - 1]}` : (isDesktop ? (isEffectiveFullView ? "Exit Full View" : "Close") : "Back to Work Packages")}
                           >
                             <ChevronLeft className="w-4 h-4" />
-                            <span>{ticketHistory.length > 0 ? `#${ticketHistory[ticketHistory.length - 1]}` : (isDesktop && isInspectorFullView ? "Back to Table" : "Back")}</span>
+                            <span>{ticketHistory.length > 0 ? `#${ticketHistory[ticketHistory.length - 1]}` : (isDesktop && isEffectiveFullView ? "Exit Full View" : "Back")}</span>
                           </button>
 
                           {/* Breadcrumbs for deep navigation */}
@@ -2112,9 +2142,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                             type="button"
                             onClick={toggleInspectorFullView}
                             className="hidden lg:flex p-1.5 rounded-lg border border-[#1e293b] bg-[#090d16] text-[#94a3b8] hover:text-white hover:border-slate-600 transition"
-                            title={isInspectorFullView ? "Exit Full View (Side-by-side mode)" : "Expand to Full View"}
+                            title={isEffectiveFullView ? "Exit Full View (Side-by-side mode)" : "Expand to Full View"}
                           >
-                            {isInspectorFullView ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                            {isEffectiveFullView ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                           </button>
 
                           <button
@@ -2266,19 +2296,19 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                       )}
 
                       {inspectorTab === 'details' && (
-                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                        <div className={isEffectiveFullView ? "max-w-4xl mx-auto" : ""}>
                           {renderDescriptionSection()}
                         </div>
                       )}
 
                       {inspectorTab === 'efforts' && (
-                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                        <div className={isEffectiveFullView ? "max-w-4xl mx-auto" : ""}>
                           {renderEffortsSection()}
                         </div>
                       )}
 
                       {inspectorTab === 'comments' && (
-                        <div className={isInspectorFullView ? "max-w-4xl mx-auto" : ""}>
+                        <div className={isEffectiveFullView ? "max-w-4xl mx-auto" : ""}>
                           {renderCommentsSection()}
                         </div>
                       )}
