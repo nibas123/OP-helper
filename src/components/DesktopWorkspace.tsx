@@ -157,6 +157,7 @@ export interface DesktopWorkspaceProps {
   setIsSaveViewModalOpen?: (open: boolean) => void;
   onQuickLogEffortSubmit?: (ticketId: number, hours: string, comment: string) => Promise<void>;
   onAddCommentSubmit?: (ticketId: number, comment: string) => Promise<void>;
+  currentWeekTotalHours?: number;
   monthTotalHours?: number;
   syncQueue?: SyncQueueItem[];
   handleProcessSingleSyncItem?: (item: SyncQueueItem) => Promise<void>;
@@ -217,6 +218,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     applySavedView,
     todayTotalHours,
     weeklyTotalHours,
+    currentWeekTotalHours = weeklyTotalHours,
     monthTotalHours = 0,
     syncQueue = [],
     handleProcessSingleSyncItem,
@@ -595,6 +597,80 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     });
     return Array.from(map.values()).sort((a, b) => b.totalHours - a.totalHours);
   }, [allEfforts, tickets]);
+
+  // Automatically select Monday (or today if present in week) when switching weeks if current selected date is outside week
+  useEffect(() => {
+    if (weekDays && weekDays.length > 0) {
+      const inWeek = weekDays.some(d => d.dateStr === selectedEffortDate);
+      if (!inWeek) {
+        const todayItem = weekDays.find(d => d.isToday);
+        setSelectedEffortDate(todayItem ? todayItem.dateStr : weekDays[0].dateStr);
+      }
+    }
+  }, [weekDays, selectedEffortDate, setSelectedEffortDate]);
+
+  // Active day details for the first KPI card in Time Tracking tab
+  const activeDayHours = useMemo(() => {
+    return hoursPerDateMap[selectedEffortDate] || 0;
+  }, [hoursPerDateMap, selectedEffortDate]);
+
+  const activeDayCardTitle = useMemo(() => {
+    const today = new Date();
+    const todayDateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    if (selectedEffortDate === todayDateStr) {
+      return "Today's Total";
+    }
+    const dayObj = weekDays.find(d => d.dateStr === selectedEffortDate);
+    if (dayObj) {
+      return `${dayObj.dayName}, ${dayObj.label} Total`;
+    }
+    return "Selected Day Total";
+  }, [selectedEffortDate, weekDays]);
+
+  // Active week card title for Time Tracking tab
+  const activeWeekCardTitle = useMemo(() => {
+    return weekOffset === 0 ? "This Week Total" : "Week Total";
+  }, [weekOffset]);
+
+  // Active month calculation for the third KPI card in Time Tracking tab
+  const activeMonthPrefix = useMemo(() => {
+    if (selectedEffortDate && selectedEffortDate.length >= 7) {
+      return selectedEffortDate.slice(0, 7);
+    }
+    if (weekDays && weekDays.length > 2 && weekDays[2].dateStr) {
+      return weekDays[2].dateStr.slice(0, 7);
+    }
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  }, [selectedEffortDate, weekDays]);
+
+  const activeMonthName = useMemo(() => {
+    try {
+      const [y, m] = activeMonthPrefix.split('-');
+      const d = new Date(Number(y), Number(m) - 1, 1);
+      return d.toLocaleDateString('en-US', { month: 'long' });
+    } catch {
+      return "Month";
+    }
+  }, [activeMonthPrefix]);
+
+  const activeMonthTotalHours = useMemo(() => {
+    return allEfforts.reduce((sum, eff) => {
+      if (eff.spentOn && eff.spentOn.startsWith(activeMonthPrefix)) {
+        return +(sum + eff.hours).toFixed(2);
+      }
+      return sum;
+    }, 0);
+  }, [allEfforts, activeMonthPrefix]);
+
+  const activeMonthCardTitle = useMemo(() => {
+    const today = new Date();
+    const currentPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+    if (activeMonthPrefix === currentPrefix) {
+      return "This Month Total";
+    }
+    return `${activeMonthName} Total`;
+  }, [activeMonthPrefix, activeMonthName]);
 
   // Project assignees for selected ticket
   const selectedTicketAssignees = useMemo(() => {
@@ -1447,7 +1523,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
 
               <span className="px-2 py-1 text-blue-400 flex items-center gap-1" title="This week's total logged hours">
                 <Clock className="w-3 h-3 text-blue-400" />
-                <span>Week: <strong className="text-white">{weeklyTotalHours.toFixed(1)}h</strong></span>
+                <span>Week: <strong className="text-white">{currentWeekTotalHours.toFixed(1)}h</strong></span>
               </span>
 
               <div className="h-3.5 w-px bg-[#1e293b] hidden md:block" />
@@ -1533,7 +1609,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               <div className="bg-[#0f172a] p-2 sm:p-3 rounded-xl border border-[#1e293b] flex flex-col justify-between hover:border-blue-500/30 transition text-center sm:text-left">
                 <span className="text-[10px] sm:text-[11px] font-mono text-blue-400 uppercase tracking-wide">Week</span>
                 <div className="flex items-baseline justify-center sm:justify-start gap-1 sm:gap-2 mt-0.5 sm:mt-1">
-                  <span className="text-base sm:text-xl font-bold text-blue-400 font-mono">{weeklyTotalHours.toFixed(1)}h</span>
+                  <span className="text-base sm:text-xl font-bold text-blue-400 font-mono">{currentWeekTotalHours.toFixed(1)}h</span>
                   <span className="text-[10px] sm:text-[11px] text-[#64748b] hidden sm:inline">/ 40.0h</span>
                 </div>
               </div>
@@ -2237,9 +2313,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
-                  <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">Today's Total</span>
+                  <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">{activeDayCardTitle}</span>
                   <div className="text-2xl font-bold text-white font-mono mt-0.5">
-                    {todayTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 8.0h target</span>
+                    {activeDayHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 8.0h target</span>
                   </div>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
@@ -2249,7 +2325,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
 
               <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
-                  <span className="text-[11px] font-mono text-blue-400 uppercase tracking-wide">This Week Total</span>
+                  <span className="text-[11px] font-mono text-blue-400 uppercase tracking-wide">{activeWeekCardTitle}</span>
                   <div className="text-2xl font-bold text-white font-mono mt-0.5">
                     {weeklyTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 40.0h week</span>
                   </div>
@@ -2261,9 +2337,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
 
               <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
-                  <span className="text-[11px] font-mono text-purple-400 uppercase tracking-wide">This Month Total</span>
+                  <span className="text-[11px] font-mono text-purple-400 uppercase tracking-wide">{activeMonthCardTitle}</span>
                   <div className="text-2xl font-bold text-white font-mono mt-0.5">
-                    {monthTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 160h month</span>
+                    {activeMonthTotalHours.toFixed(1)}h <span className="text-xs text-[#64748b] font-normal font-sans">/ 160h month</span>
                   </div>
                 </div>
                 <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">

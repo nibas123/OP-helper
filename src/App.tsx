@@ -35,6 +35,20 @@ import { extractTicketIdFromUrlOrText } from './utils/urlParser';
 import { shouldIncludeTicket } from './utils/devOpsFilter';
 import { DEFAULT_STATUSES, DEFAULT_PRIORITIES } from './constants/opDefaults';
 
+// Helper to get local date string YYYY-MM-DD avoiding UTC timezone shifts
+export function getLocalDateString(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function getLocalMonthString(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
 // Helper to get 5-day work week (Monday - Friday, excluding Sat & Sun)
 function getWorkWeekDays(weekOffset = 0): { dateStr: string; label: string; dayName: string; isToday: boolean }[] {
   const now = new Date();
@@ -48,12 +62,12 @@ function getWorkWeekDays(weekOffset = 0): { dateStr: string; label: string; dayN
   monday.setDate(now.getDate() + diffToMonday);
 
   const days = [];
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString(new Date());
 
   for (let i = 0; i < 5; i++) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(d);
     const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
     const label = `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })}`;
     days.push({
@@ -171,7 +185,7 @@ export default function App() {
   const [effortTicketSearch, setEffortTicketSearch] = useState('');
   const [effortSelectedTicket, setEffortSelectedTicket] = useState<LocalTicket | null>(null);
   const [effortModalHours, setEffortModalHours] = useState('1.0');
-  const [effortModalDate, setEffortModalDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [effortModalDate, setEffortModalDate] = useState(() => getLocalDateString());
   const [effortModalComment, setEffortModalComment] = useState('');
   const [isLoggingEffort, setIsLoggingEffort] = useState(false);
   const [isFetchingEffortTicket, setIsFetchingEffortTicket] = useState(false);
@@ -223,7 +237,7 @@ export default function App() {
   // Efforts & Weekly Tracking (5-Day Work Week, Mon-Fri)
   const [weekOffset, setWeekOffset] = useState(0);
   const [allEfforts, setAllEfforts] = useState<LocalEffort[]>([]);
-  const [selectedEffortDate, setSelectedEffortDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [selectedEffortDate, setSelectedEffortDate] = useState<string>(() => getLocalDateString());
 
   // Edit Existing Logged Effort Modal
   const [editingEffort, setEditingEffort] = useState<LocalEffort | null>(null);
@@ -1622,8 +1636,8 @@ export default function App() {
   }, [filterProjects, filterStatusCategory, filterStatuses, filterTypes, filterAssignees, filterPriorities, filterStarredOnly]);
 
   // --- Efforts Calculations & Global Effort Search ---
-  const weekDays = useMemo(() => getWorkWeekDays(weekOffset), [weekOffset]);
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => getLocalDateString(), []);
+  const currentMonthStr = useMemo(() => getLocalMonthString(), []);
 
   const hoursPerDateMap = useMemo(() => {
     const map: Record<string, number> = {};
@@ -1636,10 +1650,19 @@ export default function App() {
   }, [allEfforts]);
 
   const todayTotalHours = useMemo(() => hoursPerDateMap[todayStr] || 0, [hoursPerDateMap, todayStr]);
+
+  // Current work week (offset 0 - always current calendar week for Tab 1 & global header)
+  const currentWeekDays = useMemo(() => getWorkWeekDays(0), []);
+  const currentWeekTotalHours = useMemo(() => {
+    return currentWeekDays.reduce((sum, d) => sum + (hoursPerDateMap[d.dateStr] || 0), 0);
+  }, [currentWeekDays, hoursPerDateMap]);
+
+  // Viewed work week (controlled by weekOffset for Time Tracking tab)
+  const weekDays = useMemo(() => getWorkWeekDays(weekOffset), [weekOffset]);
   const weeklyTotalHours = useMemo(() => {
     return weekDays.reduce((sum, d) => sum + (hoursPerDateMap[d.dateStr] || 0), 0);
   }, [weekDays, hoursPerDateMap]);
-  const currentMonthStr = useMemo(() => new Date().toISOString().slice(0, 7), []);
+
   const monthTotalHours = useMemo(() => {
     return allEfforts.reduce((sum, eff) => {
       if (eff.spentOn && eff.spentOn.startsWith(currentMonthStr)) {
@@ -1770,6 +1793,7 @@ export default function App() {
           applySavedView={applySavedView}
           todayTotalHours={todayTotalHours}
           weeklyTotalHours={weeklyTotalHours}
+          currentWeekTotalHours={currentWeekTotalHours}
           monthTotalHours={monthTotalHours}
           syncQueue={syncQueue}
           handleProcessSingleSyncItem={handleProcessSingleSyncItem}
