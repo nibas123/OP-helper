@@ -672,6 +672,41 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
     return `${activeMonthName} Total`;
   }, [activeMonthPrefix, activeMonthName]);
 
+  // Effort scope filter: 'day' | 'week' | 'all'
+  const [effortScope, setEffortScope] = useState<'day' | 'week' | 'all'>('day');
+
+  const weekDateSet = useMemo(() => new Set(weekDays.map(d => d.dateStr)), [weekDays]);
+
+  const effortsForViewedWeek = useMemo(() => {
+    return allEfforts.filter(e => e.spentOn && weekDateSet.has(e.spentOn));
+  }, [allEfforts, weekDateSet]);
+
+  const displayedEfforts = useMemo(() => {
+    if (searchedEfforts) return searchedEfforts;
+    if (effortScope === 'day') return effortsForSelectedDate;
+    if (effortScope === 'week') return effortsForViewedWeek;
+    return allEfforts;
+  }, [searchedEfforts, effortScope, effortsForSelectedDate, effortsForViewedWeek, allEfforts]);
+
+  const distinctPackagesInScope = useMemo(() => {
+    const map = new Map<number, { id: number; subject: string; project: string; hours: number }>();
+    displayedEfforts.forEach(eff => {
+      const existing = map.get(eff.workPackageId);
+      if (existing) {
+        existing.hours = +(existing.hours + eff.hours).toFixed(2);
+      } else {
+        const t = tickets.find(ticket => ticket.id === eff.workPackageId);
+        map.set(eff.workPackageId, {
+          id: eff.workPackageId,
+          subject: t?.subject || eff.ticketSubject || `Ticket #${eff.workPackageId}`,
+          project: t?.project || 'Tracked Work Package',
+          hours: eff.hours
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.hours - a.hours);
+  }, [displayedEfforts, tickets]);
+
   // Project assignees for selected ticket
   const selectedTicketAssignees = useMemo(() => {
     if (!selectedTicket) return [];
@@ -2259,9 +2294,9 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
         {/* TAB 2: EFFORTS & TIME TRACKER (Desktop 5-Day Grid & Filterable Table) */}
         {/* ===================================================================== */}
         {activeTab === 'efforts' && (
-          <main className="flex-1 flex flex-col min-h-0 overflow-y-auto p-6 bg-[#090d16] space-y-6">
+          <main className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 bg-[#090d16] space-y-6">
             {/* Week navigation & KPI Header */}
-            <div className="flex flex-wrap items-center justify-between gap-4 bg-[#0d1322] border border-[#1e293b] p-4 rounded-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-4 bg-[#0d1322] border border-[#1e293b] p-4 rounded-2xl shrink-0">
               <div>
                 <span className="text-[10px] font-mono text-[#64748b] uppercase tracking-wider block">Time Tracking</span>
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -2310,7 +2345,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             </div>
 
             {/* KPI Summary strip for Today, This Week, and This Month */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 shrink-0">
               <div className="bg-[#0d1322] border border-[#1e293b] p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <span className="text-[11px] font-mono text-emerald-400 uppercase tracking-wide">{activeDayCardTitle}</span>
@@ -2349,7 +2384,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             </div>
 
             {/* 5-Day Work Week Grid (Interactive cards for Mon - Fri) */}
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 shrink-0">
               {weekDays.map(day => {
                 const dayHours = hoursPerDateMap[day.dateStr] || 0;
                 const isSelected = selectedEffortDate === day.dateStr;
@@ -2358,7 +2393,10 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 return (
                   <button
                     key={day.dateStr}
-                    onClick={() => setSelectedEffortDate(day.dateStr)}
+                    onClick={() => {
+                      setSelectedEffortDate(day.dateStr);
+                      setEffortScope('day');
+                    }}
                     className={`p-4 rounded-2xl border text-left transition flex flex-col justify-between ${
                       isSelected
                         ? 'bg-blue-600/15 border-blue-500 shadow-lg shadow-blue-500/10'
@@ -2394,16 +2432,67 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
               })}
             </div>
 
-            {/* Effort History Table with Search */}
-            <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl overflow-hidden flex flex-col">
+            {/* Effort History Table with Search & Scope Switcher */}
+            <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl overflow-hidden shrink-0">
               <div className="p-4 border-b border-[#1e293b] flex items-center justify-between gap-4 flex-wrap">
-                <div>
-                  <h3 className="text-sm font-bold text-white">
-                    {searchedEfforts ? `Search Results (${searchedEfforts.length})` : `Efforts Logged on ${selectedEffortDate}`}
-                  </h3>
-                  <span className="text-[11px] text-[#64748b] font-mono">
-                    Total: {((searchedEfforts || effortsForSelectedDate).reduce((s, e) => s + e.hours, 0)).toFixed(2)}h
-                  </span>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-blue-400" />
+                      <span>
+                        {searchedEfforts
+                          ? `Search Results (${searchedEfforts.length})`
+                          : effortScope === 'week'
+                            ? `Efforts in Week of ${weekDays[0]?.label} – ${weekDays[weekDays.length - 1]?.label}`
+                            : effortScope === 'all'
+                              ? 'All Logged Efforts'
+                              : `Efforts Logged on ${selectedEffortDate}`}
+                      </span>
+                    </h3>
+                    <span className="text-[11px] text-[#64748b] font-mono">
+                      Total: {(displayedEfforts.reduce((s, e) => s + e.hours, 0)).toFixed(2)}h
+                      {displayedEfforts.length > 0 && ` • ${displayedEfforts.length} ${displayedEfforts.length === 1 ? 'entry' : 'entries'}`}
+                    </span>
+                  </div>
+
+                  {/* Scope filter buttons */}
+                  {!searchedEfforts && (
+                    <div className="flex items-center bg-[#090d16] border border-[#1e293b] rounded-xl p-0.5 text-xs font-mono">
+                      <button
+                        type="button"
+                        onClick={() => setEffortScope('day')}
+                        className={`px-2.5 py-1 rounded-lg transition ${
+                          effortScope === 'day'
+                            ? 'bg-blue-600 text-white font-bold'
+                            : 'text-[#94a3b8] hover:text-white'
+                        }`}
+                      >
+                        Selected Day
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEffortScope('week')}
+                        className={`px-2.5 py-1 rounded-lg transition ${
+                          effortScope === 'week'
+                            ? 'bg-blue-600 text-white font-bold'
+                            : 'text-[#94a3b8] hover:text-white'
+                        }`}
+                      >
+                        Entire Week ({weeklyTotalHours.toFixed(1)}h)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEffortScope('all')}
+                        className={`px-2.5 py-1 rounded-lg transition ${
+                          effortScope === 'all'
+                            ? 'bg-blue-600 text-white font-bold'
+                            : 'text-[#94a3b8] hover:text-white'
+                        }`}
+                      >
+                        All Time
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="relative w-64">
@@ -2426,6 +2515,36 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                 </div>
               </div>
 
+              {/* Distinct packages summary pill bar */}
+              {distinctPackagesInScope.length > 0 && (
+                <div className="px-4 py-2.5 bg-[#0a0f1d] border-b border-[#1e293b] flex items-center gap-2 overflow-x-auto no-scrollbar">
+                  <span className="text-[10px] font-mono uppercase text-[#64748b] tracking-wider shrink-0 flex items-center gap-1">
+                    <FolderKanban className="w-3 h-3 text-blue-400" />
+                    <span>Work Packages ({distinctPackagesInScope.length}):</span>
+                  </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {distinctPackagesInScope.map(pkg => (
+                      <button
+                        key={pkg.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTicketId(pkg.id);
+                          setActiveTab('tickets');
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-[#0d1322] border border-[#1e293b] hover:border-blue-500/50 text-xs font-mono transition group shrink-0"
+                        title={`${pkg.subject} (${pkg.hours.toFixed(1)}h logged) - Click to view ticket`}
+                      >
+                        <span className="text-blue-400 font-bold group-hover:underline">#{pkg.id}</span>
+                        <span className="text-slate-300 max-w-[140px] truncate hidden sm:inline">{pkg.subject}</span>
+                        <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1 rounded text-[10px]">
+                          {pkg.hours.toFixed(1)}h
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Table */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
@@ -2441,14 +2560,14 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#1e293b]/70">
-                    {(searchedEfforts || effortsForSelectedDate).length === 0 ? (
+                    {displayedEfforts.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="p-8 text-center text-[#64748b]">
                           No effort entries found for this selection.
                         </td>
                       </tr>
                     ) : (
-                      (searchedEfforts || effortsForSelectedDate).map(entry => (
+                      displayedEfforts.map(entry => (
                         <tr key={entry.id} className="hover:bg-[#131b2e] transition">
                           <td className="py-2.5 px-4 font-mono text-[#94a3b8]">{entry.spentOn}</td>
                           <td className="py-2.5 px-4 font-mono font-bold text-blue-400">
@@ -2509,7 +2628,7 @@ export default function DesktopWorkspace(props: DesktopWorkspaceProps) {
             </div>
 
             {/* Tracked Tickets Overview (Requirement 8) */}
-            <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl overflow-hidden flex flex-col">
+            <div className="bg-[#0d1322] border border-[#1e293b] rounded-2xl overflow-hidden shrink-0">
               <div className="p-4 border-b border-[#1e293b] flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
